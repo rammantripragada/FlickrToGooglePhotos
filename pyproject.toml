@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flickr-to-google-photos"
+version = "0.1.0"
+description = "Safe, resumable Flickr to Google Photos migration"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "Flickr to Google Photos contributors"}]
+dependencies = [
+  "keyring>=25.0",
+  "python-dotenv>=1.0",
+  "requests>=2.31",
+  "requests-oauthlib>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "responses>=0.25"]
+
+[project.scripts]
+flickr-gphotos = "flickr_to_google_photos.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
