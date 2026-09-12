@@ -54,7 +54,7 @@ flickr-gphotos gui
 flickr-gphotos-gui
 ```
 
-The GUI provides read-only Flickr authorization and inventory controls, a visual album-selection table, current status, and duplicate reports. Inventory work runs in the background, so the window remains responsive. It has no upload, delete, or Google Photos mutation controls.
+The GUI provides read-only Flickr authorization and inventory controls, a visual album-selection table, current status, and duplicate reports. Authorization changes to a green **Flickr authorized ✓** state after completion. Inventory work runs in the background with an animated progress bar and live photo/video or album counts, so the window remains responsive. It has no upload, delete, or Google Photos mutation controls.
 
 ## Flickr application and OAuth setup
 

@@ -17,5 +17,7 @@ class FakeFlickr:
 def test_inventory_is_resumable(tmp_path):
     database = MigrationDatabase(tmp_path / "state.sqlite3")
     service = InventoryService(FakeFlickr(), database)
-    assert service.run()["photos"] == 1
+    progress: list[tuple[str, int]] = []
+    assert service.run(progress=lambda stage, count: progress.append((stage, count)))["photos"] == 1
     assert service.run()["album_memberships"] == 1
+    assert progress == [("photos and videos", 1), ("albums", 1)]
