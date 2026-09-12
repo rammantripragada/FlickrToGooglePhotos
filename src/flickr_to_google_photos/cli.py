@@ -35,6 +35,9 @@ def build_parser() -> argparse.ArgumentParser:
         command = subparsers.add_parser(name, help=help_text)
         _database_argument(command)
         command.add_argument("--json", action="store_true", help="emit JSON")
+    duplicates = subparsers.add_parser("duplicates", help="report repeated album membership and verified duplicate files")
+    _database_argument(duplicates)
+    duplicates.add_argument("--json", action="store_true", help="emit JSON")
     return parser
 
 
@@ -77,6 +80,18 @@ def main(argv: list[str] | None = None) -> None:
             else:
                 for key, value in result.items():
                     print(f"{key.replace('_', ' '):20} {value}")
+            return
+
+        if args.command == "duplicates":
+            database.initialize()
+            result = database.duplicate_report()
+            if args.json:
+                print(json.dumps(result, sort_keys=True))
+            else:
+                for category, records in result.items():
+                    print(f"{category.replace('_', ' ')}: {len(records)}")
+                    for record in records:
+                        print(f"  {json.dumps(record, sort_keys=True)}")
             return
 
         if args.command == "inventory":

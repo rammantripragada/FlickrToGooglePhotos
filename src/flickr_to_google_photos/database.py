@@ -108,8 +108,40 @@ class MigrationDatabase:
         with self.connection() as conn:
             return {
                 "photos": conn.execute("SELECT count(*) FROM flickr_photo").fetchone()[0],
+                "image_items": conn.execute("SELECT count(*) FROM flickr_photo WHERE media_type='photo'").fetchone()[0],
+                "video_items": conn.execute("SELECT count(*) FROM flickr_photo WHERE media_type='video'").fetchone()[0],
                 "albums": conn.execute("SELECT count(*) FROM flickr_album").fetchone()[0],
                 "album_memberships": conn.execute("SELECT count(*) FROM flickr_album_photo").fetchone()[0],
                 "verified_downloads": conn.execute("SELECT count(*) FROM flickr_photo WHERE verification_state='verified'").fetchone()[0],
                 "google_uploaded": conn.execute("SELECT count(*) FROM flickr_photo WHERE upload_state='uploaded'").fetchone()[0],
             }
+
+    def duplicate_report(self) -> dict[str, list[dict[str, object]]]:
+        """Return duplicate relationships without changing any migration state.
+
+        ``album_membership_duplicates`` identifies one Flickr media item placed in
+        multiple albums. ``content_duplicates`` is populated after the download
+        phase verifies SHA-256 checksums for distinct Flickr IDs.
+        """
+        with self.connection() as conn:
+            memberships = conn.execute(
+                """SELECT p.flickr_id, p.media_type, p.filename, COUNT(*) AS album_count,
+                   GROUP_CONCAT(a.title, ' | ') AS album_titles
+                   FROM flickr_album_photo ap
+                   JOIN flickr_photo p ON p.flickr_id = ap.photo_flickr_id
+                   JOIN flickr_album a ON a.flickr_id = ap.album_flickr_id
+                   GROUP BY p.flickr_id HAVING COUNT(*) > 1
+                   ORDER BY album_count DESC, p.flickr_id"""
+            ).fetchall()
+            content = conn.execute(
+                """SELECT checksum_sha256, media_type, COUNT(*) AS item_count,
+                   GROUP_CONCAT(flickr_id, ',') AS flickr_ids
+                   FROM flickr_photo
+                   WHERE verification_state='verified' AND checksum_sha256 IS NOT NULL
+                   GROUP BY checksum_sha256, media_type HAVING COUNT(*) > 1
+                   ORDER BY item_count DESC, checksum_sha256"""
+            ).fetchall()
+        return {
+            "album_membership_duplicates": [dict(row) for row in memberships],
+            "content_duplicates": [dict(row) for row in content],
+        }

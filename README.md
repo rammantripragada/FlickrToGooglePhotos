@@ -21,6 +21,7 @@
 | Account identity | `flickr.test.login` |
 | Photo discovery | Paginated `flickr.people.getPhotos` plus per-photo `getInfo` and `getSizes` |
 | Albums | Paginated photoset discovery and ordered membership inventory |
+| Photos and videos | Both media types are inventoried; type is stored per Flickr item |
 | Metadata | IDs, title, description, tags, dates, location/GPS when exposed, source format and raw Flickr API response |
 | Recovery | SQLite upserts preserve future download/checksum/upload fields on rediscovery |
 | Rate limits | HTTP 429/5xx, Flickr temporary error 105, connection, and timeout retries with exponential backoff and jitter |
@@ -105,6 +106,20 @@ upload:   not_started → uploading → uploaded
 
 The process never treats an item as verified or uploaded solely because it was attempted. On a future restart, stale in-progress state will be reconciled with the file checksum or destination API result before advancing.
 
+## Duplicate detection
+
+Run this after inventory to identify a photo or video that Flickr places in more than one album:
+
+```bash
+flickr-gphotos duplicates
+flickr-gphotos duplicates --json
+```
+
+This does **not** delete, move, or de-duplicate anything. It reports two distinct cases:
+
+- `album_membership_duplicates`: one Flickr media ID belongs to multiple albums. This is normally intentional and lets the later Google phase preserve album membership.
+- `content_duplicates`: two or more distinct Flickr IDs have the same verified SHA-256 checksum. This report becomes available after the planned download/verify phase; it detects byte-identical photos or videos without trusting filenames or metadata.
+
 ## Google Photos plan (not yet enabled)
 
 Before Phase 2, create a Google Cloud project and configure OAuth according to the [Google Photos Library API setup](https://developers.google.com/photos/library/guides/get-started). Google Photos now limits Library API management to media and albums created by the app, so this project will create corresponding new destination albums; it will not manage pre-existing Google Photos albums. [Google’s current API update](https://developers.google.com/photos/support/updates)
@@ -118,6 +133,7 @@ flickr-gphotos auth-flickr [--callback-url URL] [--manual-verifier]
 flickr-gphotos inventory [--database PATH] [--dry-run] [--no-photo-details]
 flickr-gphotos status [--database PATH] [--json]
 flickr-gphotos report [--database PATH] [--json]
+flickr-gphotos duplicates [--database PATH] [--json]
 ```
 
 Planned, but intentionally unavailable until their safety tests are implemented: `download`, `verify`, `auth-google`, `upload`, `albums`, and `retry-failed`.

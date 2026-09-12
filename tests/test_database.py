@@ -31,3 +31,20 @@ def test_replacing_album_membership_is_idempotent(tmp_path):
     db.replace_album_membership("album", ["one", "two"])
     db.replace_album_membership("album", ["two"])
     assert db.summary()["album_memberships"] == 1
+
+
+def test_duplicate_report_finds_shared_album_membership_and_verified_content(tmp_path):
+    db = MigrationDatabase(tmp_path / "migration.sqlite3")
+    db.initialize()
+    db.upsert_account("account", "user", None)
+    db.upsert_photo("account", photo("one"))
+    db.upsert_photo("account", photo("two"))
+    db.upsert_album("account", FlickrAlbum("album-a", "A", None, 1, {}))
+    db.upsert_album("account", FlickrAlbum("album-b", "B", None, 1, {}))
+    db.replace_album_membership("album-a", ["one"])
+    db.replace_album_membership("album-b", ["one"])
+    with db.connection() as conn:
+        conn.execute("UPDATE flickr_photo SET verification_state='verified', checksum_sha256='same' WHERE flickr_id IN ('one', 'two')")
+    report = db.duplicate_report()
+    assert report["album_membership_duplicates"][0]["flickr_id"] == "one"
+    assert report["content_duplicates"][0]["flickr_ids"] == "one,two"
