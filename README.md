@@ -44,6 +44,18 @@ cp .env.example .env
 
 `keyring` uses macOS Keychain. The first authorization may cause macOS to ask whether Python may access the keychain; allow it for the migration tool.
 
+## Desktop GUI
+
+Launch the native desktop interface with:
+
+```bash
+flickr-gphotos gui
+# or
+flickr-gphotos-gui
+```
+
+The GUI provides read-only Flickr authorization and inventory controls, a visual album-selection table, current status, and duplicate reports. Inventory work runs in the background, so the window remains responsive. It has no upload, delete, or Google Photos mutation controls.
+
 ## Flickr application and OAuth setup
 
 1. Sign in to Flickr and create a non-commercial API application at [Flickr App Garden](https://www.flickr.com/services/apps/create/).
@@ -87,6 +99,16 @@ flickr-gphotos inventory --no-photo-details
 ```
 
 An inventory can be stopped and run again. Existing source records update their Flickr metadata while retaining progress fields such as checksums, verified-download state, and future Google IDs.
+
+After a normal interactive inventory, the tool prints all discovered Flickr albums and asks which album IDs should migrate. Selection is stored locally and can be changed any time:
+
+```bash
+flickr-gphotos albums                 # list albums and select interactively
+flickr-gphotos albums --all           # select every discovered album
+flickr-gphotos albums --select 123 --select 456
+```
+
+For a scripted inventory, select explicitly with `--all-albums` or one or more `--album FLICKR_ID` flags. Discovery remains complete regardless of selection; the choice controls only the later Google album/media migration phase.
 
 ## Local database
 
@@ -137,6 +159,9 @@ Google's current API can list only media created by this app, not the user’s w
 ```text
 flickr-gphotos auth-flickr [--callback-url URL] [--manual-verifier]
 flickr-gphotos inventory [--database PATH] [--dry-run] [--no-photo-details]
+                         [--all-albums | --album FLICKR_ID | --no-album-selection]
+flickr-gphotos albums [--database PATH] [--all | --select FLICKR_ID]
+flickr-gphotos gui
 flickr-gphotos status [--database PATH] [--json]
 flickr-gphotos report [--database PATH] [--json]
 flickr-gphotos duplicates [--database PATH] [--json]

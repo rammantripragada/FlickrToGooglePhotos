@@ -22,6 +22,7 @@ dev = ["pytest>=8", "responses>=0.25"]
 
 [project.scripts]
 flickr-gphotos = "flickr_to_google_photos.cli:main"
+flickr-gphotos-gui = "flickr_to_google_photos.gui:launch"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

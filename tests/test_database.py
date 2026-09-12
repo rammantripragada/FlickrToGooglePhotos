@@ -48,3 +48,15 @@ def test_duplicate_report_finds_shared_album_membership_and_verified_content(tmp
     report = db.duplicate_report()
     assert report["album_membership_duplicates"][0]["flickr_id"] == "one"
     assert report["content_duplicates"][0]["flickr_ids"] == "one,two"
+
+
+def test_album_selection_replaces_prior_selection_and_rejects_unknown_ids(tmp_path):
+    db = MigrationDatabase(tmp_path / "migration.sqlite3")
+    db.initialize()
+    db.upsert_account("account", "user", None)
+    db.upsert_album("account", FlickrAlbum("a", "A", None, 0, {}))
+    db.upsert_album("account", FlickrAlbum("b", "B", None, 0, {}))
+    db.set_selected_albums({"a"})
+    assert [album["flickr_id"] for album in db.albums() if album["selected_for_migration"]] == ["a"]
+    db.set_selected_albums({"b"})
+    assert [album["flickr_id"] for album in db.albums() if album["selected_for_migration"]] == ["b"]

@@ -10,7 +10,7 @@ from typing import Iterator
 
 from .flickr import FlickrAlbum, FlickrPhoto
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS flickr_account (
@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS flickr_album (
   flickr_id TEXT PRIMARY KEY, account_nsid TEXT NOT NULL REFERENCES flickr_account(nsid),
   title TEXT NOT NULL, description TEXT, photo_count INTEGER, raw_json TEXT NOT NULL,
   google_album_id TEXT, album_state TEXT NOT NULL DEFAULT 'discovered',
+  selected_for_migration INTEGER NOT NULL DEFAULT 0 CHECK(selected_for_migration IN (0,1)),
   discovered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS flickr_album_photo (
@@ -68,6 +69,9 @@ class MigrationDatabase:
     def initialize(self) -> None:
         with self.connection() as conn:
             conn.executescript(SCHEMA)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(flickr_album)")}
+            if "selected_for_migration" not in columns:
+                conn.execute("ALTER TABLE flickr_album ADD COLUMN selected_for_migration INTEGER NOT NULL DEFAULT 0")
             conn.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (?)", (SCHEMA_VERSION,))
 
     def upsert_account(self, nsid: str, username: str | None, realname: str | None) -> None:
@@ -104,6 +108,26 @@ class MigrationDatabase:
             conn.executemany("INSERT INTO flickr_album_photo(album_flickr_id,photo_flickr_id,position) VALUES(?,?,?)",
                              [(album_id, photo_id, position) for position, photo_id in enumerate(photo_ids)])
 
+    def albums(self) -> list[dict[str, object]]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT flickr_id, title, description, photo_count, selected_for_migration FROM flickr_album ORDER BY title COLLATE NOCASE, flickr_id"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def set_selected_albums(self, flickr_album_ids: set[str]) -> None:
+        """Replace selection atomically; unknown IDs are rejected to avoid typos."""
+        with self.connection() as conn:
+            known = {row[0] for row in conn.execute("SELECT flickr_id FROM flickr_album")}
+            unknown = flickr_album_ids - known
+            if unknown:
+                raise ValueError(f"Unknown Flickr album ID(s): {', '.join(sorted(unknown))}")
+            conn.execute("UPDATE flickr_album SET selected_for_migration=0")
+            conn.executemany(
+                "UPDATE flickr_album SET selected_for_migration=1, updated_at=CURRENT_TIMESTAMP WHERE flickr_id=?",
+                [(album_id,) for album_id in flickr_album_ids],
+            )
+
     def summary(self) -> dict[str, int]:
         with self.connection() as conn:
             return {
@@ -111,6 +135,7 @@ class MigrationDatabase:
                 "image_items": conn.execute("SELECT count(*) FROM flickr_photo WHERE media_type='photo'").fetchone()[0],
                 "video_items": conn.execute("SELECT count(*) FROM flickr_photo WHERE media_type='video'").fetchone()[0],
                 "albums": conn.execute("SELECT count(*) FROM flickr_album").fetchone()[0],
+                "selected_albums": conn.execute("SELECT count(*) FROM flickr_album WHERE selected_for_migration=1").fetchone()[0],
                 "album_memberships": conn.execute("SELECT count(*) FROM flickr_album_photo").fetchone()[0],
                 "verified_downloads": conn.execute("SELECT count(*) FROM flickr_photo WHERE verification_state='verified'").fetchone()[0],
                 "google_uploaded": conn.execute("SELECT count(*) FROM flickr_photo WHERE upload_state='uploaded'").fetchone()[0],

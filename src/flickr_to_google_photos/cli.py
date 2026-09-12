@@ -31,6 +31,10 @@ def build_parser() -> argparse.ArgumentParser:
     _database_argument(inventory)
     inventory.add_argument("--dry-run", action="store_true", help="count source items without changing SQLite")
     inventory.add_argument("--no-photo-details", action="store_true", help="skip one getInfo call per photo")
+    selection = inventory.add_mutually_exclusive_group()
+    selection.add_argument("--all-albums", action="store_true", help="select every discovered album for the future migration")
+    selection.add_argument("--album", action="append", default=[], metavar="FLICKR_ID", help="select one album; repeat for multiple")
+    selection.add_argument("--no-album-selection", action="store_true", help="keep existing album selection without prompting")
     for name, help_text in (("status", "show local migration state"), ("report", "emit local migration report")):
         command = subparsers.add_parser(name, help=help_text)
         _database_argument(command)
@@ -38,11 +42,38 @@ def build_parser() -> argparse.ArgumentParser:
     duplicates = subparsers.add_parser("duplicates", help="report repeated album membership and verified duplicate files")
     _database_argument(duplicates)
     duplicates.add_argument("--json", action="store_true", help="emit JSON")
+    albums = subparsers.add_parser("albums", help="list discovered Flickr albums and choose the migration set")
+    _database_argument(albums)
+    albums.add_argument("--all", action="store_true", help="select every album without prompting")
+    albums.add_argument("--select", action="append", default=[], metavar="FLICKR_ID", help="select one album; repeat for multiple")
+    subparsers.add_parser("gui", help="launch the native desktop interface")
     return parser
 
 
 def _db(settings: Settings, override: Path | None) -> MigrationDatabase:
     return MigrationDatabase(override or settings.database_path)
+
+
+def _print_albums(database: MigrationDatabase) -> None:
+    for album in database.albums():
+        marker = "[x]" if album["selected_for_migration"] else "[ ]"
+        print(f"{marker} {album['flickr_id']}  {album['title']} ({album['photo_count'] or 0} items)")
+
+
+def _select_albums_interactively(database: MigrationDatabase) -> None:
+    albums = database.albums()
+    if not albums:
+        print("No Flickr albums were discovered.")
+        return
+    print("Discovered Flickr albums:")
+    _print_albums(database)
+    answer = input("Albums to migrate: enter IDs separated by commas, 'all', or 'none': ").strip()
+    if answer.lower() == "all":
+        database.set_selected_albums({str(album["flickr_id"]) for album in albums})
+    elif answer.lower() in {"", "none"}:
+        database.set_selected_albums(set())
+    else:
+        database.set_selected_albums({part.strip() for part in answer.split(",") if part.strip()})
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -51,6 +82,10 @@ def main(argv: list[str] | None = None) -> None:
     settings = Settings.from_environment()
     configure_logging(settings.log_level)
     try:
+        if args.command == "gui":
+            from .gui import launch
+            launch(settings)
+            return
         if args.command == "auth-flickr":
             key, secret = settings.require_flickr()
             client = FlickrClient(key, secret)
@@ -94,6 +129,17 @@ def main(argv: list[str] | None = None) -> None:
                         print(f"  {json.dumps(record, sort_keys=True)}")
             return
 
+        if args.command == "albums":
+            database.initialize()
+            if args.all:
+                database.set_selected_albums({str(album["flickr_id"]) for album in database.albums()})
+            elif args.select:
+                database.set_selected_albums(set(args.select))
+            else:
+                _select_albums_interactively(database)
+            _print_albums(database)
+            return
+
         if args.command == "inventory":
             key, secret = settings.require_flickr()
             token = CredentialStore().load_flickr()
@@ -103,6 +149,15 @@ def main(argv: list[str] | None = None) -> None:
             result = InventoryService(client, database).run(
                 include_photo_details=not args.no_photo_details, dry_run=args.dry_run
             )
+            if not args.dry_run:
+                if args.all_albums:
+                    database.set_selected_albums({str(album["flickr_id"]) for album in database.albums()})
+                elif args.album:
+                    database.set_selected_albums(set(args.album))
+                elif not args.no_album_selection and sys.stdin.isatty():
+                    _select_albums_interactively(database)
+                elif not args.no_album_selection:
+                    print("Album selection not prompted (non-interactive input). Run `flickr-gphotos albums` to choose albums.")
             print(json.dumps(result, sort_keys=True))
             return
     except (ConfigurationError, RuntimeError) as error:
