@@ -126,6 +126,12 @@ Before Phase 2, create a Google Cloud project and configure OAuth according to t
 
 The planned upload layer will use `photoslibrary.appendonly`, Google’s two-step upload flow, serial `batchCreate` operations per user, API-sized batches (up to 50), and persisted Google media/album IDs. It will also explicitly reconcile the small ambiguous window where a process dies after a remote request succeeds but before SQLite records its response.
 
+### Google duplicate protection
+
+The upload layer has a non-destructive `GoogleDeduplicationGuard` ready for integration. Before any Google create request, it checks the migration journal: a Flickr item with an existing Google media ID is skipped, and an item left in `uploading` by a crash is blocked for reconciliation instead of retried blindly. This prevents the migration itself from creating duplicate Google items.
+
+Google's current API can list only media created by this app, not the user’s whole pre-existing Google Photos library. Consequently, the application will not claim an exact duplicate match against pre-existing Google photos or videos. It will audit app-created items and report candidates, but will never delete Google content automatically.
+
 ## CLI reference (Phase 1)
 
 ```text

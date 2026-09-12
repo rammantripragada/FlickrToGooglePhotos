@@ -114,6 +114,7 @@ class MigrationDatabase:
                 "album_memberships": conn.execute("SELECT count(*) FROM flickr_album_photo").fetchone()[0],
                 "verified_downloads": conn.execute("SELECT count(*) FROM flickr_photo WHERE verification_state='verified'").fetchone()[0],
                 "google_uploaded": conn.execute("SELECT count(*) FROM flickr_photo WHERE upload_state='uploaded'").fetchone()[0],
+                "google_reconciliation_required": conn.execute("SELECT count(*) FROM flickr_photo WHERE upload_state='uploading'").fetchone()[0],
             }
 
     def duplicate_report(self) -> dict[str, list[dict[str, object]]]:
