@@ -15,7 +15,7 @@ class FakeFlickr:
     def iter_albums(self, _, progress=None):
         if progress: progress(1, 1)
         return iter([{"id": "a1", "title": {"_content": "Set"}, "photos": "1"}])
-    def iter_album_photo_ids(self, _): return iter(["p1"])
+    def iter_album_photo_ids(self, _, __=None): return iter(["p1"])
 
 
 def test_inventory_is_resumable(tmp_path):

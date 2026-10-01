@@ -75,7 +75,7 @@ class InventoryService:
                 if progress:
                     progress("photos and videos", completed_photos, photo_total)
         for membership_count, album in enumerate(albums, start=1):
-            self.database.replace_album_membership(album.id, list(self.client.iter_album_photo_ids(album.id)))
+            self.database.replace_album_membership(album.id, list(self.client.iter_album_photo_ids(album.id, account.nsid)))
             if progress:
                 progress("album memberships", membership_count, album_total)
         summary = self.database.summary()
@@ -89,7 +89,7 @@ class InventoryService:
         albums = self.database.selected_albums()
         if not albums: raise RuntimeError("No albums are approved for Google sync.")
         for album_number, album in enumerate(albums, start=1):
-            listed = list(self.client.iter_album_photos(str(album["flickr_id"])))
+            listed = list(self.client.iter_album_photos(str(album["flickr_id"]), account.nsid))
             def fetch(item: dict) -> object:
                 worker = getattr(self.client, "new_worker", lambda: self.client)()
                 photo_id = str(item["id"])

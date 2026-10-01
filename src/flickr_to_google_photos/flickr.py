@@ -245,10 +245,14 @@ class FlickrClient:
                 return
             page += 1
 
-    def iter_album_photo_ids(self, album_id: str) -> Iterator[str]:
-        for raw in self._pages("flickr.photosets.getPhotos", "photoset", photoset_id=album_id):
+    def iter_album_photo_ids(self, album_id: str, user_id: str | None = None) -> Iterator[str]:
+        params = {"photoset_id": album_id}
+        if user_id: params["user_id"] = user_id
+        for raw in self._pages("flickr.photosets.getPhotos", "photoset", **params):
             yield str(raw["id"])
 
-    def iter_album_photos(self, album_id: str) -> Iterator[dict[str, Any]]:
+    def iter_album_photos(self, album_id: str, user_id: str | None = None) -> Iterator[dict[str, Any]]:
         extras = "description,date_upload,date_taken,original_format,tags,geo,url_o,media"
-        yield from self._pages("flickr.photosets.getPhotos", "photoset", photoset_id=album_id, extras=extras)
+        params = {"photoset_id": album_id, "extras": extras}
+        if user_id: params["user_id"] = user_id
+        yield from self._pages("flickr.photosets.getPhotos", "photoset", **params)
