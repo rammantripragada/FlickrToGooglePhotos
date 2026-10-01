@@ -171,3 +171,25 @@ class MigrationDatabase:
             "album_membership_duplicates": [dict(row) for row in memberships],
             "content_duplicates": [dict(row) for row in content],
         }
+
+    def selected_albums(self) -> list[dict[str, object]]:
+        with self.connection() as conn:
+            rows = conn.execute("SELECT * FROM flickr_album WHERE selected_for_migration=1 ORDER BY title COLLATE NOCASE").fetchall()
+        return [dict(row) for row in rows]
+
+    def album_photos(self, album_id: str) -> list[dict[str, object]]:
+        with self.connection() as conn:
+            rows = conn.execute("SELECT p.* FROM flickr_album_photo ap JOIN flickr_photo p ON p.flickr_id=ap.photo_flickr_id WHERE ap.album_flickr_id=? ORDER BY ap.position", (album_id,)).fetchall()
+        return [dict(row) for row in rows]
+
+    def set_google_album_id(self, album_id: str, google_id: str) -> None:
+        with self.connection() as conn: conn.execute("UPDATE flickr_album SET google_album_id=?, album_state='created' WHERE flickr_id=?", (google_id, album_id))
+
+    def set_local_file(self, flickr_id: str, path: str, checksum: str) -> None:
+        with self.connection() as conn: conn.execute("UPDATE flickr_photo SET local_path=?, checksum_sha256=?, download_state='verified', verification_state='verified' WHERE flickr_id=?", (path, checksum, flickr_id))
+
+    def mark_uploading(self, flickr_id: str) -> None:
+        with self.connection() as conn: conn.execute("UPDATE flickr_photo SET upload_state='uploading' WHERE flickr_id=?", (flickr_id,))
+
+    def mark_uploaded(self, flickr_id: str, google_id: str) -> None:
+        with self.connection() as conn: conn.execute("UPDATE flickr_photo SET upload_state='uploaded', google_media_id=? WHERE flickr_id=?", (google_id, flickr_id))

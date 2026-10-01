@@ -22,6 +22,7 @@ class Settings:
     download_dir: Path
     log_level: str
     inventory_workers: int
+    google_client_secrets_file: Path
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -34,6 +35,7 @@ class Settings:
             download_dir=Path(os.getenv("MIGRATOR_DOWNLOAD_DIR", "downloads")),
             log_level=os.getenv("MIGRATOR_LOG_LEVEL", "INFO").upper(),
             inventory_workers=max(1, min(12, int(os.getenv("MIGRATOR_INVENTORY_WORKERS", "5")))),
+            google_client_secrets_file=Path(os.getenv("GOOGLE_CLIENT_SECRETS_FILE", "credentials/google-client.json")),
         )
 
     def require_flickr(self) -> tuple[str, str]:

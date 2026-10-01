@@ -27,6 +27,9 @@ def build_parser() -> argparse.ArgumentParser:
     auth = subparsers.add_parser("auth-flickr", help="authorize read-only access to Flickr")
     auth.add_argument("--callback-url", help="registered Flickr callback URL; defaults to FLICKR_OAUTH_CALLBACK")
     auth.add_argument("--manual-verifier", action="store_true", help="do not start the loopback callback receiver")
+    subparsers.add_parser("auth-google", help="authorize Google Photos uploads")
+    migrate = subparsers.add_parser("migrate", help="create approved Google albums and copy their media")
+    _database_argument(migrate)
     inventory = subparsers.add_parser("inventory", help="discover Flickr photos and albums into SQLite")
     _database_argument(inventory)
     inventory.add_argument("--dry-run", action="store_true", help="count source items without changing SQLite")
@@ -106,6 +109,11 @@ def main(argv: list[str] | None = None) -> None:
             CredentialStore().save_flickr(token)
             print(f"Stored Flickr credentials for {token.username or token.user_nsid} in the macOS keychain.")
             return
+        if args.command == "auth-google":
+            from .google import authorize
+            authorize(settings.google_client_secrets_file)
+            print("Google Photos authorization completed.")
+            return
 
         database = _db(settings, args.database)
         if args.command in {"status", "report"}:
@@ -160,6 +168,11 @@ def main(argv: list[str] | None = None) -> None:
                     _select_albums_interactively(database)
                 elif not args.no_album_selection:
                     print("Album selection not prompted (non-interactive input). Run `flickr-gphotos albums` to choose albums.")
+            print(json.dumps(result, sort_keys=True))
+            return
+        if args.command == "migrate":
+            from .migrate import MigrationService
+            result = MigrationService(database, settings.download_dir).run()
             print(json.dumps(result, sort_keys=True))
             return
     except (ConfigurationError, RuntimeError) as error:

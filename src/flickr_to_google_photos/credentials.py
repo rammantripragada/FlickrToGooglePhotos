@@ -29,3 +29,9 @@ class CredentialStore:
             return None
         raw = keyring.get_password(SERVICE_NAME, f"flickr:{user_nsid}")
         return FlickrToken(**json.loads(raw)) if raw else None
+
+    def save_google(self, token_json: str) -> None:
+        keyring.set_password(SERVICE_NAME, "google:active", token_json)
+
+    def load_google(self) -> str | None:
+        return keyring.get_password(SERVICE_NAME, "google:active")

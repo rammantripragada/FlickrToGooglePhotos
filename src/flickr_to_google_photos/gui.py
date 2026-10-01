@@ -59,6 +59,7 @@ class MigrationApp:
         self.ttk.Label(frame, text=f"Callback: {self.settings.flickr_oauth_callback}").pack(anchor="w", pady=(4, 16))
         self.auth_button = self.ttk.Button(frame, text="Authorize Flickr (read-only)", command=self.authorize_flickr)
         self.auth_button.pack(anchor="w")
+        self.ttk.Button(frame, text="Authorize Google Photos", command=self.authorize_google).pack(anchor="w", pady=(10, 0))
         self.auth_state = self.tk.Label(
             frame, text="Flickr authorization: not completed", background="#fee2e2", foreground="#991b1b", padx=8, pady=5
         )
@@ -84,6 +85,7 @@ class MigrationApp:
         buttons = self.ttk.Frame(frame)
         buttons.pack(anchor="w", pady=18)
         self.ttk.Button(buttons, text="Run Flickr Inventory", command=self.run_inventory).pack(side="left")
+        self.ttk.Button(buttons, text="Migrate approved albums", command=self.migrate_approved).pack(side="left", padx=8)
         self.ttk.Button(buttons, text="Refresh Local Status", command=self.refresh).pack(side="left", padx=8)
         self.ttk.Label(frame, text=(
             "Inventory reads Flickr only. When complete, use Albums to choose the set that may be migrated later."
@@ -148,6 +150,25 @@ class MigrationApp:
                 progress=progress, photo_workers=self.inventory_workers.get()
             )
         self._background("Running read-only Flickr inventory", operation, shows_inventory_progress=True)
+
+    def authorize_google(self) -> None:
+        def operation() -> str:
+            from .google import authorize
+            authorize(self.settings.google_client_secrets_file)
+            return "Google Photos authorized"
+        self._background("Waiting for Google authorization", operation)
+
+    def migrate_approved(self) -> None:
+        from tkinter import messagebox
+        if not self.database.selected_albums():
+            messagebox.showwarning("No albums selected", "Approve one or more albums in the Albums tab first.")
+            return
+        if not messagebox.askyesno("Start migration", "Create approved Google Photos albums and copy their media now? This may use Google storage."):
+            return
+        def operation() -> object:
+            from .migrate import MigrationService
+            return MigrationService(self.database, self.settings.download_dir).run()
+        self._background("Migrating approved albums", operation)
 
     def refresh(self) -> None:
         summary = self.database.summary()
