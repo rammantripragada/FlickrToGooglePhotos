@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import queue
 import threading
 import webbrowser
@@ -16,6 +17,8 @@ from .flickr import FlickrClient
 from .google_deduplication import GoogleDeduplicationGuard
 from .inventory import InventoryService
 from .oauth_callback import OAuthCallbackServer
+
+LOG = logging.getLogger(__name__)
 
 
 class MigrationApp:
@@ -134,6 +137,7 @@ class MigrationApp:
             try:
                 self.events.put(("success", (label, operation())))
             except Exception as error:  # surfaced in UI, never silently swallowed
+                LOG.exception("gui_background_task_failed")
                 self.events.put(("error", (label, str(error))))
         threading.Thread(target=worker, daemon=True).start()
 
@@ -324,6 +328,9 @@ def launch(settings: Settings | None = None) -> None:
         import tkinter as tk
     except ImportError as error:
         raise RuntimeError("Tkinter is unavailable. Install a Python build with Tk support.") from error
+    active_settings = settings or Settings.from_environment()
+    from .logging import configure_logging
+    configure_logging(active_settings.log_level, active_settings.log_file)
     root = tk.Tk()
-    MigrationApp(root, settings or Settings.from_environment())
+    MigrationApp(root, active_settings)
     root.mainloop()

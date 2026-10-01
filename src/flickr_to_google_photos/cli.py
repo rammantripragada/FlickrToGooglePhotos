@@ -87,7 +87,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
     settings = Settings.from_environment()
-    configure_logging(settings.log_level)
+    configure_logging(settings.log_level, settings.log_file)
     try:
         if args.command == "gui":
             from .gui import launch

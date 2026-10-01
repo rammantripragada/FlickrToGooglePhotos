@@ -21,6 +21,7 @@ class Settings:
     database_path: Path
     download_dir: Path
     log_level: str
+    log_file: Path
     inventory_workers: int
     google_client_secrets_file: Path
 
@@ -34,6 +35,7 @@ class Settings:
             database_path=Path(os.getenv("MIGRATOR_DATABASE", "flickr-to-google-photos.sqlite3")),
             download_dir=Path(os.getenv("MIGRATOR_DOWNLOAD_DIR", "downloads")),
             log_level=os.getenv("MIGRATOR_LOG_LEVEL", "INFO").upper(),
+            log_file=Path(os.getenv("MIGRATOR_LOG_FILE", "logs/flickr-gphotos.jsonl")),
             inventory_workers=max(1, min(12, int(os.getenv("MIGRATOR_INVENTORY_WORKERS", "5")))),
             google_client_secrets_file=Path(os.getenv("GOOGLE_CLIENT_SECRETS_FILE", "credentials/google-client.json")),
         )
