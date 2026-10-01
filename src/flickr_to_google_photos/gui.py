@@ -84,9 +84,9 @@ class MigrationApp:
         self.ttk.Label(frame, textvariable=self.inventory_percent, font=("TkDefaultFont", 16, "bold")).pack(anchor="w")
         self.ttk.Label(frame, textvariable=self.inventory_progress_text).pack(anchor="w")
         self.ttk.Label(frame, text="Tasks", font=("TkDefaultFont", 12, "bold")).pack(anchor="w", pady=(18, 4))
-        self.task_tree = self.ttk.Treeview(frame, columns=("task", "state"), show="headings", height=5)
-        self.task_tree.heading("task", text="Task"); self.task_tree.heading("state", text="State")
-        self.task_tree.column("task", width=360); self.task_tree.column("state", width=360)
+        self.task_tree = self.ttk.Treeview(frame, columns=("task", "progress", "state"), show="headings", height=5)
+        self.task_tree.heading("task", text="Task"); self.task_tree.heading("progress", text="Progress"); self.task_tree.heading("state", text="Status")
+        self.task_tree.column("task", width=280); self.task_tree.column("progress", width=90, anchor="center"); self.task_tree.column("state", width=350)
         self.task_tree.pack(fill="x")
         buttons = self.ttk.Frame(frame)
         buttons.pack(anchor="w", pady=18)
@@ -124,8 +124,8 @@ class MigrationApp:
     def _background(self, label: str, operation: Callable[[], object], shows_inventory_progress: bool = False) -> None:
         self.status_text.set(f"{label}…")
         row = self.task_rows.get(label)
-        if row and self.task_tree.exists(row): self.task_tree.item(row, values=(label, "Running"))
-        else: self.task_rows[label] = self.task_tree.insert("", "end", values=(label, "Running"))
+        if row and self.task_tree.exists(row): self.task_tree.item(row, values=(label, "0%", "Running"))
+        else: self.task_rows[label] = self.task_tree.insert("", "end", values=(label, "0%", "Running"))
         if shows_inventory_progress:
             self.inventory_progress.configure(value=0)
             self.inventory_percent.set("0%")
@@ -156,7 +156,7 @@ class MigrationApp:
             if not token:
                 raise RuntimeError("Authorize Flickr first.")
             def progress(stage: str, count: int, total: int) -> None:
-                self.events.put(("inventory_progress", (stage, count, total)))
+                self.events.put(("inventory_progress", ("Running read-only Flickr inventory", stage, count, total)))
             return InventoryService(FlickrClient(key, secret, token), self.database).run(
                 progress=progress, photo_workers=self.inventory_workers.get()
             )
@@ -166,7 +166,7 @@ class MigrationApp:
         def operation() -> object:
             key, secret = self.settings.require_flickr(); token = CredentialStore().load_flickr()
             if not token: raise RuntimeError("Authorize Flickr first.")
-            def progress(stage: str, count: int, total: int) -> None: self.events.put(("inventory_progress", (stage, count, total)))
+            def progress(stage: str, count: int, total: int) -> None: self.events.put(("inventory_progress", ("Inventorying approved albums only", stage, count, total)))
             return InventoryService(FlickrClient(key, secret, token), self.database).run_selected_albums(self.inventory_workers.get(), progress)
         self._background("Inventorying approved albums only", operation, shows_inventory_progress=True)
 
@@ -193,7 +193,7 @@ class MigrationApp:
             if not token:
                 raise RuntimeError("Authorize Flickr first.")
             def progress(stage: str, count: int, total: int) -> None:
-                self.events.put(("inventory_progress", (stage, count, total)))
+                self.events.put(("inventory_progress", ("Refreshing approved albums, then migrating", stage, count, total)))
             InventoryService(FlickrClient(key, secret, token), self.database).run_selected_albums(
                 self.inventory_workers.get(), progress
             )
@@ -275,7 +275,7 @@ class MigrationApp:
             while True:
                 kind, payload = self.events.get_nowait()
                 if kind == "inventory_progress":
-                    stage, count, total = payload  # type: ignore[misc]
+                    task_label, stage, count, total = payload  # type: ignore[misc]
                     ratio = (count / total) if total else 0.0
                     if stage == "albums":
                         percent = ratio * 10
@@ -288,11 +288,14 @@ class MigrationApp:
                     self.inventory_percent.set(f"{percent:.0f}%")
                     suffix = f"{count:,} of {total:,}" if total else f"{count:,}"
                     self.inventory_progress_text.set(f"{stage.title()}: {suffix} ({percent:.0f}%)")
+                    row = self.task_rows.get(task_label)
+                    if row and self.task_tree.exists(row):
+                        self.task_tree.item(row, values=(task_label, f"{percent:.0f}%", f"{stage.title()}: {suffix}"))
                     continue
                 label, result = payload  # type: ignore[misc]
                 if kind == "success":
                     row = self.task_rows.get(label)
-                    if row and self.task_tree.exists(row): self.task_tree.item(row, values=(label, "Completed"))
+                    if row and self.task_tree.exists(row): self.task_tree.item(row, values=(label, "100%", "Completed"))
                     self.status_text.set(f"{label} completed: {result}")
                     if label == "Waiting for Flickr authorization":
                         self._set_authorized_state()
@@ -303,7 +306,7 @@ class MigrationApp:
                     self.refresh()
                 else:
                     row = self.task_rows.get(label)
-                    if row and self.task_tree.exists(row): self.task_tree.item(row, values=(label, f"Failed: {result}"))
+                    if row and self.task_tree.exists(row): self.task_tree.item(row, values=(label, "—", f"Failed: {result}"))
                     self.status_text.set(f"{label} failed: {result}")
                     if label == "Running read-only Flickr inventory":
                         self.inventory_progress_text.set("Inventory stopped; you can safely run it again")
