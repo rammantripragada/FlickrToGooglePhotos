@@ -175,9 +175,21 @@ class MigrationApp:
         if not messagebox.askyesno("Start migration", "Create approved Google Photos albums and copy their media now? This may use Google storage."):
             return
         def operation() -> object:
+            # Refresh only selected album members immediately before any Google
+            # write. This avoids a 190k-item whole-library inventory and prevents
+            # empty destination albums from stale/absent membership data.
+            key, secret = self.settings.require_flickr()
+            token = CredentialStore().load_flickr()
+            if not token:
+                raise RuntimeError("Authorize Flickr first.")
+            def progress(stage: str, count: int, total: int) -> None:
+                self.events.put(("inventory_progress", (stage, count, total)))
+            InventoryService(FlickrClient(key, secret, token), self.database).run_selected_albums(
+                self.inventory_workers.get(), progress
+            )
             from .migrate import MigrationService
             return MigrationService(self.database, self.settings.download_dir).run()
-        self._background("Migrating approved albums", operation)
+        self._background("Refreshing approved albums, then migrating", operation, shows_inventory_progress=True)
 
     def refresh(self) -> None:
         summary = self.database.summary()

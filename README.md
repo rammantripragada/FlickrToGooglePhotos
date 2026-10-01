@@ -106,6 +106,8 @@ flickr-gphotos inventory --workers 8
 
 The desktop GUI offers the same **Parallel Flickr requests** control (1–12 workers).
 
+When you click **Migrate approved albums**, the GUI first refreshes only the approved albums’ Flickr members, then creates/reuses their Google Photos albums and transfers their media. A full-library inventory is not required.
+
 An inventory can be stopped and run again. Existing source records update their Flickr metadata while retaining progress fields such as checksums, verified-download state, and future Google IDs.
 
 Album names are discovered first and appear in the GUI's **Albums** tab while the larger parallel photo/video scan continues. You can review and approve album names for the future Google sync without waiting for every media item to finish.
