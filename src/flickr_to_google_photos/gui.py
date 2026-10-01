@@ -30,6 +30,7 @@ class MigrationApp:
         self.album_sort_reverse = False
         self.album_rows: list[dict[str, object]] = []
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
+        self.task_rows: dict[str, str] = {}
         self.style = ttk.Style(root)
         self.style.configure("Authorized.TButton", foreground="#137333")
         root.title("Flickr → Google Photos")
@@ -82,6 +83,11 @@ class MigrationApp:
         self.inventory_progress.pack(anchor="w", pady=(14, 2))
         self.ttk.Label(frame, textvariable=self.inventory_percent, font=("TkDefaultFont", 16, "bold")).pack(anchor="w")
         self.ttk.Label(frame, textvariable=self.inventory_progress_text).pack(anchor="w")
+        self.ttk.Label(frame, text="Tasks", font=("TkDefaultFont", 12, "bold")).pack(anchor="w", pady=(18, 4))
+        self.task_tree = self.ttk.Treeview(frame, columns=("task", "state"), show="headings", height=5)
+        self.task_tree.heading("task", text="Task"); self.task_tree.heading("state", text="State")
+        self.task_tree.column("task", width=360); self.task_tree.column("state", width=360)
+        self.task_tree.pack(fill="x")
         buttons = self.ttk.Frame(frame)
         buttons.pack(anchor="w", pady=18)
         self.ttk.Button(buttons, text="Run Flickr Inventory", command=self.run_inventory).pack(side="left")
@@ -104,6 +110,7 @@ class MigrationApp:
         buttons.pack(anchor="w", pady=(10, 0))
         self.ttk.Button(buttons, text="Reload", command=self.load_albums).pack(side="left")
         self.ttk.Button(buttons, text="Approve highlighted for Google sync", command=lambda: self._apply_album_selection(True)).pack(side="left", padx=6)
+        self.ttk.Button(buttons, text="Remove highlighted", command=self._remove_album_selection).pack(side="left", padx=6)
         self.ttk.Button(buttons, text="Clear selection", command=lambda: self.database.set_selected_albums(set()) or self.load_albums()).pack(side="left")
         self.ttk.Button(buttons, text="Select all", command=self._select_all_albums).pack(side="left", padx=6)
 
@@ -116,6 +123,9 @@ class MigrationApp:
 
     def _background(self, label: str, operation: Callable[[], object], shows_inventory_progress: bool = False) -> None:
         self.status_text.set(f"{label}…")
+        row = self.task_rows.get(label)
+        if row and self.task_tree.exists(row): self.task_tree.item(row, values=(label, "Running"))
+        else: self.task_rows[label] = self.task_tree.insert("", "end", values=(label, "Running"))
         if shows_inventory_progress:
             self.inventory_progress.configure(value=0)
             self.inventory_percent.set("0%")
@@ -236,10 +246,17 @@ class MigrationApp:
             self.album_tree.insert("", "end", iid=str(album["flickr_id"]), values=("✓" if album["selected_for_migration"] else "", album["flickr_id"], album["title"], album["photo_count"] or 0))
 
     def _apply_album_selection(self, _selected: bool) -> None:
-        chosen = set(self.album_tree.selection())
+        chosen = {str(album["flickr_id"]) for album in self.database.albums() if album["selected_for_migration"]}
+        chosen.update(self.album_tree.selection())
         self.database.set_selected_albums(chosen)
         self.load_albums()
         self.status_text.set(f"Approved {len(chosen)} album(s) for the future Google sync.")
+
+    def _remove_album_selection(self) -> None:
+        chosen = {str(album["flickr_id"]) for album in self.database.albums() if album["selected_for_migration"]}
+        chosen.difference_update(self.album_tree.selection())
+        self.database.set_selected_albums(chosen)
+        self.load_albums()
 
     def _select_all_albums(self) -> None:
         self.database.set_selected_albums({str(album["flickr_id"]) for album in self.database.albums()})
@@ -274,6 +291,8 @@ class MigrationApp:
                     continue
                 label, result = payload  # type: ignore[misc]
                 if kind == "success":
+                    row = self.task_rows.get(label)
+                    if row and self.task_tree.exists(row): self.task_tree.item(row, values=(label, "Completed"))
                     self.status_text.set(f"{label} completed: {result}")
                     if label == "Waiting for Flickr authorization":
                         self._set_authorized_state()
@@ -283,6 +302,8 @@ class MigrationApp:
                         self.inventory_progress_text.set("Inventory completed successfully")
                     self.refresh()
                 else:
+                    row = self.task_rows.get(label)
+                    if row and self.task_tree.exists(row): self.task_tree.item(row, values=(label, f"Failed: {result}"))
                     self.status_text.set(f"{label} failed: {result}")
                     if label == "Running read-only Flickr inventory":
                         self.inventory_progress_text.set("Inventory stopped; you can safely run it again")
