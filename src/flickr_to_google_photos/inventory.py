@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 
 from .database import MigrationDatabase
 from .flickr import FlickrClient, parse_album, parse_photo
@@ -21,6 +22,7 @@ class InventoryService:
         include_photo_details: bool = True,
         dry_run: bool = False,
         progress: Callable[[str, int, int], None] | None = None,
+        photo_workers: int = 5,
     ) -> dict[str, int]:
         """Inventory source metadata; never downloads, edits, or deletes remote content."""
         account = self.client.authenticated_account()
@@ -32,13 +34,31 @@ class InventoryService:
         def photo_progress(_count: int, total: int) -> None:
             nonlocal photo_total
             photo_total = total
-        for photo_count, listed in enumerate(self.client.iter_photos(account.nsid, progress=photo_progress), start=1):
+        def fetch_photo(listed: dict) -> object:
+            worker = getattr(self.client, "new_worker", lambda: self.client)()
             photo_id = str(listed["id"])
-            raw = self.client.photo_info(photo_id) if include_photo_details else listed
-            original_url = self.client.original_url(photo_id)
-            self.database.upsert_photo(account.nsid, parse_photo(raw, original_url))
-            if progress:
-                progress("photos and videos", photo_count, photo_total)
+            raw = worker.photo_info(photo_id) if include_photo_details else listed
+            return parse_photo(raw, worker.original_url(photo_id))
+
+        # Keep only a small bounded queue in memory for very large libraries.
+        in_flight: set[Future[object]] = set()
+        completed_photos = 0
+        max_in_flight = max(1, photo_workers) * 3
+        with ThreadPoolExecutor(max_workers=max(1, photo_workers), thread_name_prefix="flickr-detail") as executor:
+            for listed in self.client.iter_photos(account.nsid, progress=photo_progress):
+                in_flight.add(executor.submit(fetch_photo, listed))
+                if len(in_flight) >= max_in_flight:
+                    done, in_flight = wait(in_flight, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        self.database.upsert_photo(account.nsid, future.result())
+                        completed_photos += 1
+                        if progress:
+                            progress("photos and videos", completed_photos, photo_total)
+            for future in in_flight:
+                self.database.upsert_photo(account.nsid, future.result())
+                completed_photos += 1
+                if progress:
+                    progress("photos and videos", completed_photos, photo_total)
         album_total = 0
         def album_progress(_count: int, total: int) -> None:
             nonlocal album_total

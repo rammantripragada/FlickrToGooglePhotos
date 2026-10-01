@@ -21,6 +21,7 @@ class Settings:
     database_path: Path
     download_dir: Path
     log_level: str
+    inventory_workers: int
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -32,6 +33,7 @@ class Settings:
             database_path=Path(os.getenv("MIGRATOR_DATABASE", "flickr-to-google-photos.sqlite3")),
             download_dir=Path(os.getenv("MIGRATOR_DOWNLOAD_DIR", "downloads")),
             log_level=os.getenv("MIGRATOR_LOG_LEVEL", "INFO").upper(),
+            inventory_workers=max(1, min(12, int(os.getenv("MIGRATOR_INVENTORY_WORKERS", "5")))),
         )
 
     def require_flickr(self) -> tuple[str, str]:

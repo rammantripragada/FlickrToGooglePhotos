@@ -56,17 +56,27 @@ class MigrationApp:
         self.ttk.Label(frame, text=f"Callback: {self.settings.flickr_oauth_callback}").pack(anchor="w", pady=(4, 16))
         self.auth_button = self.ttk.Button(frame, text="Authorize Flickr (read-only)", command=self.authorize_flickr)
         self.auth_button.pack(anchor="w")
-        self.auth_state = self.ttk.Label(frame, text="Flickr authorization: not completed", foreground="#9b1c1c")
+        self.auth_state = self.tk.Label(
+            frame, text="Flickr authorization: not completed", background="#fee2e2", foreground="#991b1b", padx=8, pady=5
+        )
         self.auth_state.pack(anchor="w", pady=(8, 0))
+        self.ttk.Button(frame, text="Check authorization status", command=self._refresh_authorization_state).pack(anchor="w", pady=(10, 0))
 
     def _inventory_tab(self, notebook) -> None:
         frame = self.ttk.Frame(notebook, padding=16)
         notebook.add(frame, text="Inventory")
         self.summary_text = self.tk.StringVar()
         self.ttk.Label(frame, textvariable=self.summary_text, justify="left").pack(anchor="w")
+        workers = self.ttk.Frame(frame)
+        workers.pack(anchor="w", pady=(12, 0))
+        self.ttk.Label(workers, text="Parallel Flickr requests:").pack(side="left")
+        self.inventory_workers = self.tk.IntVar(value=self.settings.inventory_workers)
+        self.ttk.Spinbox(workers, from_=1, to=12, width=5, textvariable=self.inventory_workers).pack(side="left", padx=8)
         self.inventory_progress_text = self.tk.StringVar(value="Inventory idle")
+        self.inventory_percent = self.tk.StringVar(value="0%")
         self.inventory_progress = self.ttk.Progressbar(frame, mode="determinate", maximum=100, length=560)
         self.inventory_progress.pack(anchor="w", pady=(14, 2))
+        self.ttk.Label(frame, textvariable=self.inventory_percent, font=("TkDefaultFont", 16, "bold")).pack(anchor="w")
         self.ttk.Label(frame, textvariable=self.inventory_progress_text).pack(anchor="w")
         buttons = self.ttk.Frame(frame)
         buttons.pack(anchor="w", pady=18)
@@ -80,14 +90,14 @@ class MigrationApp:
         frame = self.ttk.Frame(notebook, padding=16)
         notebook.add(frame, text="Albums")
         self.album_tree = self.ttk.Treeview(frame, columns=("selected", "id", "title", "items"), show="headings", selectmode="extended")
-        for column, title, width in (("selected", "Migrate", 80), ("id", "Flickr ID", 165), ("title", "Album", 360), ("items", "Items", 70)):
+        for column, title, width in (("selected", "Google sync", 100), ("id", "Flickr ID", 165), ("title", "Album name", 340), ("items", "Items", 70)):
             self.album_tree.heading(column, text=title)
             self.album_tree.column(column, width=width, anchor="center" if column in {"selected", "items"} else "w")
         self.album_tree.pack(fill="both", expand=True)
         buttons = self.ttk.Frame(frame)
         buttons.pack(anchor="w", pady=(10, 0))
         self.ttk.Button(buttons, text="Reload", command=self.load_albums).pack(side="left")
-        self.ttk.Button(buttons, text="Select highlighted", command=lambda: self._apply_album_selection(True)).pack(side="left", padx=6)
+        self.ttk.Button(buttons, text="Approve highlighted for Google sync", command=lambda: self._apply_album_selection(True)).pack(side="left", padx=6)
         self.ttk.Button(buttons, text="Clear selection", command=lambda: self.database.set_selected_albums(set()) or self.load_albums()).pack(side="left")
         self.ttk.Button(buttons, text="Select all", command=self._select_all_albums).pack(side="left", padx=6)
 
@@ -102,6 +112,7 @@ class MigrationApp:
         self.status_text.set(f"{label}…")
         if shows_inventory_progress:
             self.inventory_progress.configure(value=0)
+            self.inventory_percent.set("0%")
             self.inventory_progress_text.set("Connecting to Flickr…")
         def worker() -> None:
             try:
@@ -130,7 +141,9 @@ class MigrationApp:
                 raise RuntimeError("Authorize Flickr first.")
             def progress(stage: str, count: int, total: int) -> None:
                 self.events.put(("inventory_progress", (stage, count, total)))
-            return InventoryService(FlickrClient(key, secret, token), self.database).run(progress=progress)
+            return InventoryService(FlickrClient(key, secret, token), self.database).run(
+                progress=progress, photo_workers=self.inventory_workers.get()
+            )
         self._background("Running read-only Flickr inventory", operation, shows_inventory_progress=True)
 
     def refresh(self) -> None:
@@ -138,12 +151,18 @@ class MigrationApp:
         self.summary_text.set("\n".join(f"{key.replace('_', ' ').title()}: {value}" for key, value in summary.items()))
         self.load_albums()
         self.load_duplicates()
-        if CredentialStore().load_flickr():
-            self._set_authorized_state()
+        self._refresh_authorization_state()
 
     def _set_authorized_state(self) -> None:
         self.auth_button.configure(text="Flickr authorized ✓", style="Authorized.TButton")
-        self.auth_state.configure(text="Flickr authorization: completed successfully", foreground="#137333")
+        self.auth_state.configure(text="Flickr authorization: completed successfully ✓", background="#dcfce7", foreground="#137333")
+
+    def _refresh_authorization_state(self) -> None:
+        if CredentialStore().load_flickr():
+            self._set_authorized_state()
+        else:
+            self.auth_button.configure(text="Authorize Flickr (read-only)", style="TButton")
+            self.auth_state.configure(text="Flickr authorization: not completed", background="#fee2e2", foreground="#991b1b")
 
     def load_albums(self) -> None:
         for item in self.album_tree.get_children():
@@ -155,7 +174,7 @@ class MigrationApp:
         chosen = set(self.album_tree.selection())
         self.database.set_selected_albums(chosen)
         self.load_albums()
-        self.status_text.set(f"Selected {len(chosen)} album(s) for the future migration.")
+        self.status_text.set(f"Approved {len(chosen)} album(s) for the future Google sync.")
 
     def _select_all_albums(self) -> None:
         self.database.set_selected_albums({str(album["flickr_id"]) for album in self.database.albums()})
@@ -178,6 +197,7 @@ class MigrationApp:
                     ratio = (count / total) if total else 0.0
                     percent = (ratio * 90) if stage == "photos and videos" else (90 + ratio * 10)
                     self.inventory_progress.configure(value=percent)
+                    self.inventory_percent.set(f"{percent:.0f}%")
                     suffix = f"{count:,} of {total:,}" if total else f"{count:,}"
                     self.inventory_progress_text.set(f"{stage.title()}: {suffix} ({percent:.0f}%)")
                     continue
@@ -187,6 +207,8 @@ class MigrationApp:
                     if label == "Waiting for Flickr authorization":
                         self._set_authorized_state()
                     if label == "Running read-only Flickr inventory":
+                        self.inventory_progress.configure(value=100)
+                        self.inventory_percent.set("100%")
                         self.inventory_progress_text.set("Inventory completed successfully")
                     self.refresh()
                 else:

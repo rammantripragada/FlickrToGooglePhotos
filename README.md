@@ -98,6 +98,14 @@ For a shorter diagnostic inventory that skips expensive per-item `getInfo` calls
 flickr-gphotos inventory --no-photo-details
 ```
 
+By default, the detailed Flickr calls run concurrently with 5 workers. Increase cautiously for a fast connection, while respecting Flickr rate limits:
+
+```bash
+flickr-gphotos inventory --workers 8
+```
+
+The desktop GUI offers the same **Parallel Flickr requests** control (1–12 workers).
+
 An inventory can be stopped and run again. Existing source records update their Flickr metadata while retaining progress fields such as checksums, verified-download state, and future Google IDs.
 
 After a normal interactive inventory, the tool prints all discovered Flickr albums and asks which album IDs should migrate. Selection is stored locally and can be changed any time:
@@ -158,7 +166,7 @@ Google's current API can list only media created by this app, not the user’s w
 
 ```text
 flickr-gphotos auth-flickr [--callback-url URL] [--manual-verifier]
-flickr-gphotos inventory [--database PATH] [--dry-run] [--no-photo-details]
+flickr-gphotos inventory [--database PATH] [--dry-run] [--no-photo-details] [--workers N]
                          [--all-albums | --album FLICKR_ID | --no-album-selection]
 flickr-gphotos albums [--database PATH] [--all | --select FLICKR_ID]
 flickr-gphotos gui

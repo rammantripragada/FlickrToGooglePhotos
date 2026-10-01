@@ -31,6 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     _database_argument(inventory)
     inventory.add_argument("--dry-run", action="store_true", help="count source items without changing SQLite")
     inventory.add_argument("--no-photo-details", action="store_true", help="skip one getInfo call per photo")
+    inventory.add_argument("--workers", type=int, help="concurrent Flickr detail requests (default: MIGRATOR_INVENTORY_WORKERS)")
     selection = inventory.add_mutually_exclusive_group()
     selection.add_argument("--all-albums", action="store_true", help="select every discovered album for the future migration")
     selection.add_argument("--album", action="append", default=[], metavar="FLICKR_ID", help="select one album; repeat for multiple")
@@ -147,7 +148,8 @@ def main(argv: list[str] | None = None) -> None:
                 raise ConfigurationError("No Flickr token in macOS keychain. Run `flickr-gphotos auth-flickr` first.")
             client = FlickrClient(key, secret, token)
             result = InventoryService(client, database).run(
-                include_photo_details=not args.no_photo_details, dry_run=args.dry_run
+                include_photo_details=not args.no_photo_details, dry_run=args.dry_run,
+                photo_workers=args.workers or settings.inventory_workers,
             )
             if not args.dry_run:
                 if args.all_albums:

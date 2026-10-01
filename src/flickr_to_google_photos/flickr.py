@@ -120,6 +120,7 @@ class FlickrClient:
     ) -> None:
         self.api_key = api_key
         self.api_secret = api_secret
+        self.token = token
         self.session = session or OAuth1Session(
             api_key,
             client_secret=api_secret,
@@ -128,6 +129,10 @@ class FlickrClient:
         )
         self.sleep = sleep
         self.max_retries = max_retries
+
+    def new_worker(self) -> "FlickrClient":
+        """Create an independently signed HTTP session for a concurrent read worker."""
+        return FlickrClient(self.api_key, self.api_secret, token=self.token, sleep=self.sleep, max_retries=self.max_retries)
 
     def authorization_url(self, callback_uri: str) -> tuple[str, str]:
         temporary = OAuth1Session(self.api_key, client_secret=self.api_secret, callback_uri=callback_uri)
