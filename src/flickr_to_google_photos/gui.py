@@ -26,6 +26,9 @@ class MigrationApp:
         self.tk, self.ttk, self.root, self.settings = tk, ttk, root, settings
         self.database = MigrationDatabase(settings.database_path)
         self.database.initialize()
+        self.album_sort_column = "title"
+        self.album_sort_reverse = False
+        self.album_rows: list[dict[str, object]] = []
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.style = ttk.Style(root)
         self.style.configure("Authorized.TButton", foreground="#137333")
@@ -91,7 +94,7 @@ class MigrationApp:
         notebook.add(frame, text="Albums")
         self.album_tree = self.ttk.Treeview(frame, columns=("selected", "id", "title", "items"), show="headings", selectmode="extended")
         for column, title, width in (("selected", "Google sync", 100), ("id", "Flickr ID", 165), ("title", "Album name", 340), ("items", "Items", 70)):
-            self.album_tree.heading(column, text=title)
+            self.album_tree.heading(column, text=title, command=lambda field=column: self._sort_albums(field))
             self.album_tree.column(column, width=width, anchor="center" if column in {"selected", "items"} else "w")
         self.album_tree.pack(fill="both", expand=True)
         buttons = self.ttk.Frame(frame)
@@ -165,9 +168,29 @@ class MigrationApp:
             self.auth_state.configure(text="Flickr authorization: not completed", background="#fee2e2", foreground="#991b1b")
 
     def load_albums(self) -> None:
+        self.album_rows = self.database.albums()
+        self._render_albums()
+
+    def _sort_albums(self, column: str) -> None:
+        if column == self.album_sort_column:
+            self.album_sort_reverse = not self.album_sort_reverse
+        else:
+            self.album_sort_column = column
+            self.album_sort_reverse = False
+        self._render_albums()
+
+    def _render_albums(self) -> None:
         for item in self.album_tree.get_children():
             self.album_tree.delete(item)
-        for album in self.database.albums():
+        field_map = {"selected": "selected_for_migration", "id": "flickr_id", "title": "title", "items": "photo_count"}
+        field = field_map[self.album_sort_column]
+        def sort_key(album: dict[str, object]) -> object:
+            value = album[field]
+            return value.casefold() if isinstance(value, str) else (value or 0)
+        for column, title in (("selected", "Google sync"), ("id", "Flickr ID"), ("title", "Album name"), ("items", "Items")):
+            arrow = " ↓" if column == self.album_sort_column and self.album_sort_reverse else " ↑" if column == self.album_sort_column else ""
+            self.album_tree.heading(column, text=title + arrow)
+        for album in sorted(self.album_rows, key=sort_key, reverse=self.album_sort_reverse):
             self.album_tree.insert("", "end", iid=str(album["flickr_id"]), values=("✓" if album["selected_for_migration"] else "", album["flickr_id"], album["title"], album["photo_count"] or 0))
 
     def _apply_album_selection(self, _selected: bool) -> None:

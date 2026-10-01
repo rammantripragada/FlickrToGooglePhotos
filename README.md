@@ -110,6 +110,8 @@ An inventory can be stopped and run again. Existing source records update their 
 
 Album names are discovered first and appear in the GUI's **Albums** tab while the larger parallel photo/video scan continues. You can review and approve album names for the future Google sync without waiting for every media item to finish.
 
+Click an Albums table heading to sort by Google-sync approval, Flickr ID, album name, or item count; click the same heading again to reverse it.
+
 After a normal interactive inventory, the tool prints all discovered Flickr albums and asks which album IDs should migrate. Selection is stored locally and can be changed any time:
 
 ```bash
