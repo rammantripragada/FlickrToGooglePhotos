@@ -30,6 +30,21 @@ class InventoryService:
             return {"photos": sum(1 for _ in self.client.iter_photos(account.nsid)), "albums": sum(1 for _ in self.client.iter_albums(account.nsid))}
         self.database.initialize()
         self.database.upsert_account(account.nsid, account.username, account.realname)
+
+        # Albums are intentionally discovered first. Their names become available
+        # for selection while a large photo/video inventory continues in parallel.
+        album_total = 0
+        def album_progress(_count: int, total: int) -> None:
+            nonlocal album_total
+            album_total = total
+        albums = []
+        for album_count, raw_album in enumerate(self.client.iter_albums(account.nsid, progress=album_progress), start=1):
+            album = parse_album(raw_album)
+            self.database.upsert_album(account.nsid, album)
+            albums.append(album)
+            if progress:
+                progress("albums", album_count, album_total)
+
         photo_total = 0
         def photo_progress(_count: int, total: int) -> None:
             nonlocal photo_total
@@ -59,16 +74,10 @@ class InventoryService:
                 completed_photos += 1
                 if progress:
                     progress("photos and videos", completed_photos, photo_total)
-        album_total = 0
-        def album_progress(_count: int, total: int) -> None:
-            nonlocal album_total
-            album_total = total
-        for album_count, raw_album in enumerate(self.client.iter_albums(account.nsid, progress=album_progress), start=1):
-            album = parse_album(raw_album)
-            self.database.upsert_album(account.nsid, album)
+        for membership_count, album in enumerate(albums, start=1):
             self.database.replace_album_membership(album.id, list(self.client.iter_album_photo_ids(album.id)))
             if progress:
-                progress("albums", album_count, album_total)
+                progress("album memberships", membership_count, album_total)
         summary = self.database.summary()
         LOG.info("inventory_complete")
         return summary

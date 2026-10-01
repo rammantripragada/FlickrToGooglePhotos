@@ -108,6 +108,8 @@ The desktop GUI offers the same **Parallel Flickr requests** control (1–12 wor
 
 An inventory can be stopped and run again. Existing source records update their Flickr metadata while retaining progress fields such as checksums, verified-download state, and future Google IDs.
 
+Album names are discovered first and appear in the GUI's **Albums** tab while the larger parallel photo/video scan continues. You can review and approve album names for the future Google sync without waiting for every media item to finish.
+
 After a normal interactive inventory, the tool prints all discovered Flickr albums and asks which album IDs should migrate. Selection is stored locally and can be changed any time:
 
 ```bash

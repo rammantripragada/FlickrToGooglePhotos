@@ -195,7 +195,13 @@ class MigrationApp:
                 if kind == "inventory_progress":
                     stage, count, total = payload  # type: ignore[misc]
                     ratio = (count / total) if total else 0.0
-                    percent = (ratio * 90) if stage == "photos and videos" else (90 + ratio * 10)
+                    if stage == "albums":
+                        percent = ratio * 10
+                        self.load_albums()
+                    elif stage == "photos and videos":
+                        percent = 10 + ratio * 80
+                    else:
+                        percent = 90 + ratio * 10
                     self.inventory_progress.configure(value=percent)
                     self.inventory_percent.set(f"{percent:.0f}%")
                     suffix = f"{count:,} of {total:,}" if total else f"{count:,}"

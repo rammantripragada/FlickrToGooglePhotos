@@ -24,4 +24,4 @@ def test_inventory_is_resumable(tmp_path):
     progress: list[tuple[str, int, int]] = []
     assert service.run(progress=lambda stage, count, total: progress.append((stage, count, total)))["photos"] == 1
     assert service.run()["album_memberships"] == 1
-    assert progress == [("photos and videos", 1, 1), ("albums", 1, 1)]
+    assert progress == [("albums", 1, 1), ("photos and videos", 1, 1), ("album memberships", 1, 1)]
