@@ -186,12 +186,20 @@ class FlickrClient:
         LOG.warning("flickr_retry", extra={"method": method, "delay_seconds": delay})
         self.sleep(delay)
 
-    def _pages(self, method: str, result_key: str, **params: Any) -> Iterator[dict[str, Any]]:
+    def _pages(
+        self, method: str, result_key: str, progress: Callable[[int, int], None] | None = None, **params: Any
+    ) -> Iterator[dict[str, Any]]:
         page = 1
+        seen = 0
         while True:
             body = self.call(method, page=page, per_page=500, **params)
             result = body[result_key]
-            yield from result.get("photo", [])
+            total = int(result.get("total", 0))
+            for item in result.get("photo", []):
+                seen += 1
+                if progress:
+                    progress(seen, total)
+                yield item
             if page >= int(result.get("pages", 1)):
                 return
             page += 1
@@ -201,9 +209,9 @@ class FlickrClient:
         user = body["user"]
         return FlickrAccount(str(user["id"]), _content(user.get("username")), _content(user.get("fullname")))
 
-    def iter_photos(self, user_id: str) -> Iterator[dict[str, Any]]:
+    def iter_photos(self, user_id: str, progress: Callable[[int, int], None] | None = None) -> Iterator[dict[str, Any]]:
         extras = "description,date_upload,date_taken,original_format,tags,geo,url_o,media"
-        yield from self._pages("flickr.people.getPhotos", "photos", user_id=user_id, extras=extras)
+        yield from self._pages("flickr.people.getPhotos", "photos", progress=progress, user_id=user_id, extras=extras)
 
     def photo_info(self, photo_id: str) -> dict[str, Any]:
         return self.call("flickr.photos.getInfo", photo_id=photo_id)["photo"]
@@ -213,12 +221,18 @@ class FlickrClient:
         original = next((item for item in sizes if item.get("label") == "Original"), None)
         return (original or sizes[-1]).get("source") if sizes else None
 
-    def iter_albums(self, user_id: str) -> Iterator[dict[str, Any]]:
+    def iter_albums(self, user_id: str, progress: Callable[[int, int], None] | None = None) -> Iterator[dict[str, Any]]:
         page = 1
+        seen = 0
         while True:
             body = self.call("flickr.photosets.getList", user_id=user_id, page=page, per_page=500)
             result = body["photosets"]
-            yield from result.get("photoset", [])
+            total = int(result.get("total", 0))
+            for item in result.get("photoset", []):
+                seen += 1
+                if progress:
+                    progress(seen, total)
+                yield item
             if page >= int(result.get("pages", 1)):
                 return
             page += 1

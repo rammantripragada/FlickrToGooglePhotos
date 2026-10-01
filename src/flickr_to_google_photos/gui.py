@@ -65,7 +65,7 @@ class MigrationApp:
         self.summary_text = self.tk.StringVar()
         self.ttk.Label(frame, textvariable=self.summary_text, justify="left").pack(anchor="w")
         self.inventory_progress_text = self.tk.StringVar(value="Inventory idle")
-        self.inventory_progress = self.ttk.Progressbar(frame, mode="indeterminate", length=460)
+        self.inventory_progress = self.ttk.Progressbar(frame, mode="determinate", maximum=100, length=560)
         self.inventory_progress.pack(anchor="w", pady=(14, 2))
         self.ttk.Label(frame, textvariable=self.inventory_progress_text).pack(anchor="w")
         buttons = self.ttk.Frame(frame)
@@ -101,7 +101,7 @@ class MigrationApp:
     def _background(self, label: str, operation: Callable[[], object], shows_inventory_progress: bool = False) -> None:
         self.status_text.set(f"{label}…")
         if shows_inventory_progress:
-            self.inventory_progress.start(12)
+            self.inventory_progress.configure(value=0)
             self.inventory_progress_text.set("Connecting to Flickr…")
         def worker() -> None:
             try:
@@ -128,8 +128,8 @@ class MigrationApp:
             token = CredentialStore().load_flickr()
             if not token:
                 raise RuntimeError("Authorize Flickr first.")
-            def progress(stage: str, count: int) -> None:
-                self.events.put(("inventory_progress", f"Read {count:,} {stage}…"))
+            def progress(stage: str, count: int, total: int) -> None:
+                self.events.put(("inventory_progress", (stage, count, total)))
             return InventoryService(FlickrClient(key, secret, token), self.database).run(progress=progress)
         self._background("Running read-only Flickr inventory", operation, shows_inventory_progress=True)
 
@@ -174,7 +174,12 @@ class MigrationApp:
             while True:
                 kind, payload = self.events.get_nowait()
                 if kind == "inventory_progress":
-                    self.inventory_progress_text.set(str(payload))
+                    stage, count, total = payload  # type: ignore[misc]
+                    ratio = (count / total) if total else 0.0
+                    percent = (ratio * 90) if stage == "photos and videos" else (90 + ratio * 10)
+                    self.inventory_progress.configure(value=percent)
+                    suffix = f"{count:,} of {total:,}" if total else f"{count:,}"
+                    self.inventory_progress_text.set(f"{stage.title()}: {suffix} ({percent:.0f}%)")
                     continue
                 label, result = payload  # type: ignore[misc]
                 if kind == "success":
@@ -182,13 +187,11 @@ class MigrationApp:
                     if label == "Waiting for Flickr authorization":
                         self._set_authorized_state()
                     if label == "Running read-only Flickr inventory":
-                        self.inventory_progress.stop()
                         self.inventory_progress_text.set("Inventory completed successfully")
                     self.refresh()
                 else:
                     self.status_text.set(f"{label} failed: {result}")
                     if label == "Running read-only Flickr inventory":
-                        self.inventory_progress.stop()
                         self.inventory_progress_text.set("Inventory stopped; you can safely run it again")
         except queue.Empty:
             pass
