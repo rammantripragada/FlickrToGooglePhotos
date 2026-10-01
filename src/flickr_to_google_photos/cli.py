@@ -35,6 +35,9 @@ def build_parser() -> argparse.ArgumentParser:
     inventory.add_argument("--dry-run", action="store_true", help="count source items without changing SQLite")
     inventory.add_argument("--no-photo-details", action="store_true", help="skip one getInfo call per photo")
     inventory.add_argument("--workers", type=int, help="concurrent Flickr detail requests (default: MIGRATOR_INVENTORY_WORKERS)")
+    selected_inventory = subparsers.add_parser("inventory-selected", help="inventory only approved album members")
+    _database_argument(selected_inventory)
+    selected_inventory.add_argument("--workers", type=int, help="concurrent Flickr detail requests")
     selection = inventory.add_mutually_exclusive_group()
     selection.add_argument("--all-albums", action="store_true", help="select every discovered album for the future migration")
     selection.add_argument("--album", action="append", default=[], metavar="FLICKR_ID", help="select one album; repeat for multiple")
@@ -170,6 +173,11 @@ def main(argv: list[str] | None = None) -> None:
                     print("Album selection not prompted (non-interactive input). Run `flickr-gphotos albums` to choose albums.")
             print(json.dumps(result, sort_keys=True))
             return
+        if args.command == "inventory-selected":
+            key, secret = settings.require_flickr(); token = CredentialStore().load_flickr()
+            if not token: raise ConfigurationError("Run `flickr-gphotos auth-flickr` first.")
+            result = InventoryService(FlickrClient(key, secret, token), database).run_selected_albums(args.workers or settings.inventory_workers)
+            print(json.dumps(result, sort_keys=True)); return
         if args.command == "migrate":
             from .migrate import MigrationService
             result = MigrationService(database, settings.download_dir).run()

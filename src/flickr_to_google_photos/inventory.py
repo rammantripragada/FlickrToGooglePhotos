@@ -81,3 +81,24 @@ class InventoryService:
         summary = self.database.summary()
         LOG.info("inventory_complete")
         return summary
+
+    def run_selected_albums(self, photo_workers: int = 5, progress: Callable[[str, int, int], None] | None = None) -> dict[str, int]:
+        """Fast path: inventory only approved album members, not the full photostream."""
+        account = self.client.authenticated_account()
+        self.database.initialize(); self.database.upsert_account(account.nsid, account.username, account.realname)
+        albums = self.database.selected_albums()
+        if not albums: raise RuntimeError("No albums are approved for Google sync.")
+        for album_number, album in enumerate(albums, start=1):
+            listed = list(self.client.iter_album_photos(str(album["flickr_id"])))
+            def fetch(item: dict) -> object:
+                worker = getattr(self.client, "new_worker", lambda: self.client)()
+                photo_id = str(item["id"])
+                return parse_photo(worker.photo_info(photo_id), worker.original_url(photo_id))
+            with ThreadPoolExecutor(max_workers=max(1, photo_workers)) as executor:
+                futures = [executor.submit(fetch, item) for item in listed]
+                for count, future in enumerate(futures, start=1):
+                    self.database.upsert_photo(account.nsid, future.result())
+                    if progress: progress(f"{album['title']} media", count, len(listed))
+            self.database.replace_album_membership(str(album["flickr_id"]), [str(item["id"]) for item in listed])
+            if progress: progress("approved albums", album_number, len(albums))
+        return self.database.summary()

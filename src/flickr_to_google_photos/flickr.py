@@ -248,3 +248,7 @@ class FlickrClient:
     def iter_album_photo_ids(self, album_id: str) -> Iterator[str]:
         for raw in self._pages("flickr.photosets.getPhotos", "photoset", photoset_id=album_id):
             yield str(raw["id"])
+
+    def iter_album_photos(self, album_id: str) -> Iterator[dict[str, Any]]:
+        extras = "description,date_upload,date_taken,original_format,tags,geo,url_o,media"
+        yield from self._pages("flickr.photosets.getPhotos", "photoset", photoset_id=album_id, extras=extras)

@@ -13,11 +13,15 @@ class MigrationService:
         self.database, self.download_dir = database, download_dir
     def run(self) -> dict[str, int]:
         google, guard = GooglePhotosClient(), GoogleDeduplicationGuard(self.database)
-        totals = {"albums": 0, "uploaded": 0, "skipped": 0, "reconcile_required": 0}
+        totals = {"albums": 0, "uploaded": 0, "skipped": 0, "reconcile_required": 0, "empty_or_uninventoried_albums": 0}
         for album in self.database.selected_albums():
+            photos = self.database.album_photos(str(album["flickr_id"]))
+            if not photos:
+                totals["empty_or_uninventoried_albums"] += 1
+                continue
             album_id = str(album["google_album_id"] or google.create_album(str(album["title"])))
             self.database.set_google_album_id(str(album["flickr_id"]), album_id); totals["albums"] += 1
-            for photo in self.database.album_photos(str(album["flickr_id"])):
+            for photo in photos:
                 decision = guard.decide(str(photo["flickr_id"]))
                 if decision.decision is GoogleUploadDecision.SKIP_ALREADY_LINKED: totals["skipped"] += 1; continue
                 if decision.decision is GoogleUploadDecision.RECONCILE_REQUIRED: totals["reconcile_required"] += 1; continue

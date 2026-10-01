@@ -85,6 +85,7 @@ class MigrationApp:
         buttons = self.ttk.Frame(frame)
         buttons.pack(anchor="w", pady=18)
         self.ttk.Button(buttons, text="Run Flickr Inventory", command=self.run_inventory).pack(side="left")
+        self.ttk.Button(buttons, text="Inventory approved albums only", command=self.run_selected_inventory).pack(side="left", padx=8)
         self.ttk.Button(buttons, text="Migrate approved albums", command=self.migrate_approved).pack(side="left", padx=8)
         self.ttk.Button(buttons, text="Refresh Local Status", command=self.refresh).pack(side="left", padx=8)
         self.ttk.Label(frame, text=(
@@ -150,6 +151,14 @@ class MigrationApp:
                 progress=progress, photo_workers=self.inventory_workers.get()
             )
         self._background("Running read-only Flickr inventory", operation, shows_inventory_progress=True)
+
+    def run_selected_inventory(self) -> None:
+        def operation() -> object:
+            key, secret = self.settings.require_flickr(); token = CredentialStore().load_flickr()
+            if not token: raise RuntimeError("Authorize Flickr first.")
+            def progress(stage: str, count: int, total: int) -> None: self.events.put(("inventory_progress", (stage, count, total)))
+            return InventoryService(FlickrClient(key, secret, token), self.database).run_selected_albums(self.inventory_workers.get(), progress)
+        self._background("Inventorying approved albums only", operation, shows_inventory_progress=True)
 
     def authorize_google(self) -> None:
         def operation() -> str:
