@@ -116,7 +116,7 @@ class FlickrClient:
         token: FlickrToken | None = None,
         session: OAuth1Session | None = None,
         sleep: Callable[[float], None] = time.sleep,
-        max_retries: int = 5,
+        max_retries: int = 8,
     ) -> None:
         self.api_key = api_key
         self.api_secret = api_secret
@@ -183,7 +183,10 @@ class FlickrClient:
         if attempt >= self.max_retries:
             raise FlickrError(f"{method} failed after {self.max_retries} retries (HTTP {response.status_code})")
         retry_after = response.headers.get("Retry-After")
-        delay = float(retry_after) if retry_after and retry_after.isdigit() else None
+        # Google/Flickr-style APIs commonly require at least 30 seconds after a
+        # 429 even when Retry-After is omitted.  Retrying sooner only prolongs
+        # the limit window and makes a large inventory appear to fail.
+        delay = max(30.0, float(retry_after)) if retry_after and retry_after.isdigit() else 30.0
         self._backoff(attempt, method, delay)
 
     def _backoff(self, attempt: int, method: str, override: float | None = None) -> None:
