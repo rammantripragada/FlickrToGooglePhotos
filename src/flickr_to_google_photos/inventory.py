@@ -91,9 +91,16 @@ class InventoryService:
         for album_number, album in enumerate(albums, start=1):
             listed = list(self.client.iter_album_photos(str(album["flickr_id"]), account.nsid))
             def fetch(item: dict) -> object:
+                # photosets.getPhotos already supplies the requested title,
+                # description, tags, dates, geo, media type, and url_o extras.
+                # Avoid a second getInfo call for every item; fall back only
+                # when Flickr omitted the original-size URL.
+                original_url = item.get("url_o")
+                if original_url:
+                    return parse_photo(item, str(original_url))
                 worker = getattr(self.client, "new_worker", lambda: self.client)()
                 photo_id = str(item["id"])
-                return parse_photo(worker.photo_info(photo_id), worker.original_url(photo_id))
+                return parse_photo(item, worker.original_url(photo_id))
             with ThreadPoolExecutor(max_workers=max(1, photo_workers)) as executor:
                 futures = [executor.submit(fetch, item) for item in listed]
                 for count, future in enumerate(futures, start=1):

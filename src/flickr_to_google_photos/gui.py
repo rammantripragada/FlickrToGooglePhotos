@@ -282,6 +282,10 @@ class MigrationApp:
                         self.load_albums()
                     elif stage == "photos and videos":
                         percent = 10 + ratio * 80
+                    elif str(stage).endswith(" media"):
+                        # Targeted selected-album inventory: media discovery is
+                        # the main phase, followed by a short membership phase.
+                        percent = ratio * 90
                     else:
                         percent = 90 + ratio * 10
                     self.inventory_progress.configure(value=percent)
