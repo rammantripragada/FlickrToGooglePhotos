@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flickr-to-google-photos-web"
+version = "0.1.0"
+description = "Local web dashboard for Flickr to Google Photos migration"
+requires-python = ">=3.11"
+dependencies = ["fastapi>=0.115", "uvicorn[standard]>=0.30"]
+
+[project.scripts]
+flickr-gphotos-web = "flickr_to_google_photos_web.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
