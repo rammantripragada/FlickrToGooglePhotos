@@ -73,10 +73,20 @@ def _content(value: Any) -> str | None:
 def parse_photo(raw: dict[str, Any], original_url: str | None = None) -> FlickrPhoto:
     """Normalize both `people.getPhotos` and `photos.getInfo` response shapes."""
     location = raw.get("location") or {}
-    tags = raw.get("tags", {}).get("tag", [])
-    if isinstance(tags, str):
-        tags = tags.split()
-    normalized_tags = [str(tag.get("raw") or tag.get("_content") or "") for tag in tags] if isinstance(tags, list) else []
+    # ``photos.getInfo`` returns {"tag": [...]}, but
+    # ``photosets.getPhotos`` with the ``tags`` extra may return a plain
+    # space-delimited string.  Album-only inventory uses the latter response.
+    raw_tags = raw.get("tags", {})
+    if isinstance(raw_tags, dict):
+        tags = raw_tags.get("tag", [])
+    elif isinstance(raw_tags, str):
+        tags = raw_tags.split()
+    else:
+        tags = []
+    normalized_tags = [
+        str(tag.get("raw") or tag.get("_content") or "") if isinstance(tag, dict) else str(tag)
+        for tag in tags
+    ] if isinstance(tags, list) else []
     dates = raw.get("dates") or {}
     latitude = location.get("latitude")
     longitude = location.get("longitude")

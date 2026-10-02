@@ -19,6 +19,12 @@ def test_parse_detailed_photo_metadata():
     assert photo.original_url == "https://original.example/42.jpg"
 
 
+def test_parse_album_photo_with_string_tags():
+    """photosets.getPhotos may return tags as a string rather than an object."""
+    photo = parse_photo({"id": "43", "title": "Album image", "tags": "family holiday 2024", "media": "photo"})
+    assert photo.tags == ["family", "holiday", "2024"]
+
+
 def test_parse_album_handles_flickr_content_wrappers():
     album = parse_album({"id": "set-1", "title": {"_content": "Holiday"}, "description": {"_content": "2020"}, "photos": "3"})
     assert (album.id, album.title, album.description, album.photo_count) == ("set-1", "Holiday", "2020", 3)
