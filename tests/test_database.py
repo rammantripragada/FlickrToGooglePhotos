@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from io import BytesIO
+
 from flickr_to_google_photos.database import MigrationDatabase
 from flickr_to_google_photos.flickr import FlickrAlbum, FlickrPhoto
+from flickr_to_google_photos.migrate import MigrationService
 
 
 def photo(photo_id: str = "photo-1") -> FlickrPhoto:
@@ -60,3 +63,31 @@ def test_album_selection_replaces_prior_selection_and_rejects_unknown_ids(tmp_pa
     assert [album["flickr_id"] for album in db.albums() if album["selected_for_migration"]] == ["a"]
     db.set_selected_albums({"b"})
     assert [album["flickr_id"] for album in db.albums() if album["selected_for_migration"]] == ["b"]
+
+
+def test_download_retries_a_flickr_rate_limit(tmp_path):
+    class Database:
+        def set_local_file(self, *_args):
+            pass
+
+    class Response:
+        def __init__(self, status: int, body: bytes = b"file"):
+            self.status_code, self.headers, self.raw = status, {}, BytesIO(body)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                from requests import HTTPError
+                raise HTTPError(f"HTTP {self.status_code}")
+
+    responses = iter([Response(429), Response(200, b"original")])
+    waits: list[float] = []
+    service = MigrationService(Database(), tmp_path, request_get=lambda *_args, **_kwargs: next(responses), sleep=waits.append)
+    result = service._download({"flickr_id": "42", "filename": "source.jpg", "local_path": None, "original_url": "https://example.test/42"})
+    assert result.read_bytes() == b"original"
+    assert waits == [60.0]
