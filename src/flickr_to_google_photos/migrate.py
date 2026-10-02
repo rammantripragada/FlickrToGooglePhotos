@@ -56,7 +56,7 @@ class MigrationService:
                 temporary.replace(target)
                 self.database.set_local_file(str(photo["flickr_id"]), str(target), sha256_file(target))
                 return target
-            except (requests.ConnectionError, requests.Timeout, requests.ChunkedEncodingError) as error:
+            except (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError) as error:
                 if attempt >= self.max_download_retries:
                     raise RuntimeError(f"Download failed after {self.max_download_retries} retries for {photo['flickr_id']}") from error
                 temporary.unlink(missing_ok=True)

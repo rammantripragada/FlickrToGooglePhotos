@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from io import BytesIO
 
+import requests
+
 from flickr_to_google_photos.database import MigrationDatabase
 from flickr_to_google_photos.flickr import FlickrAlbum, FlickrPhoto
 from flickr_to_google_photos.migrate import MigrationService
@@ -91,3 +93,36 @@ def test_download_retries_a_flickr_rate_limit(tmp_path):
     result = service._download({"flickr_id": "42", "filename": "source.jpg", "local_path": None, "original_url": "https://example.test/42"})
     assert result.read_bytes() == b"original"
     assert waits == [60.0]
+
+
+def test_download_retries_a_temporary_network_failure(tmp_path):
+    class Database:
+        def set_local_file(self, *_args):
+            pass
+
+    class Response:
+        status_code, headers, raw = 200, {}, BytesIO(b"original")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def raise_for_status(self):
+            pass
+
+    responses = iter([requests.ConnectionError("DNS lookup failed"), Response()])
+    waits: list[float] = []
+
+    def request_get(*_args, **_kwargs):
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    service = MigrationService(Database(), tmp_path, request_get=request_get, sleep=waits.append)
+    result = service._download({"flickr_id": "42", "filename": "source.jpg", "local_path": None, "original_url": "https://example.test/42"})
+    assert result.read_bytes() == b"original"
+    assert len(waits) == 1
+    assert 15 <= waits[0] < 16
