@@ -149,13 +149,55 @@ def test_download_paces_consecutive_flickr_file_requests(tmp_path):
             pass
 
     responses = iter([Response(b"one"), Response(b"two")])
+    clock = [0.0]
     waits: list[float] = []
+
+    def sleep(delay: float):
+        waits.append(delay)
+        clock[0] += delay
+
     service = MigrationService(
         Database(), tmp_path, request_get=lambda *_args, **_kwargs: next(responses),
-        sleep=waits.append, download_interval_seconds=5,
+        sleep=sleep, monotonic=lambda: clock[0], download_interval_seconds=5,
     )
     first = {"flickr_id": "one", "filename": "one.jpg", "local_path": None, "original_url": "https://example.test/one"}
     second = {"flickr_id": "two", "filename": "two.jpg", "local_path": None, "original_url": "https://example.test/two"}
     service._download(first)
     service._download(second)
     assert waits == [5]
+
+
+def test_download_does_not_add_delay_after_a_long_file(tmp_path):
+    class Database:
+        def set_local_file(self, *_args):
+            pass
+
+    clock = [0.0]
+    waits: list[float] = []
+
+    class Response:
+        status_code, headers = 200, {}
+
+        def __init__(self, body: bytes, duration: float):
+            self.raw, self.duration = BytesIO(body), duration
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            clock[0] += self.duration
+            return False
+
+        def raise_for_status(self):
+            pass
+
+    responses = iter([Response(b"video", 20), Response(b"image", 0)])
+    service = MigrationService(
+        Database(), tmp_path, request_get=lambda *_args, **_kwargs: next(responses),
+        sleep=waits.append, monotonic=lambda: clock[0], download_interval_seconds=5,
+    )
+    first = {"flickr_id": "video", "filename": "clip.mp4", "local_path": None, "original_url": "https://example.test/video"}
+    second = {"flickr_id": "image", "filename": "image.jpg", "local_path": None, "original_url": "https://example.test/image"}
+    service._download(first)
+    service._download(second)
+    assert waits == []

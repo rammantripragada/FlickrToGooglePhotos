@@ -22,13 +22,15 @@ class MigrationService:
         *,
         request_get=requests.get,
         sleep=time.sleep,
+        monotonic=time.monotonic,
         max_download_retries: int = 8,
         download_interval_seconds: float = 5.0,
     ) -> None:
         self.database, self.download_dir = database, download_dir
-        self._request_get, self._sleep, self.max_download_retries = request_get, sleep, max_download_retries
+        self._request_get, self._sleep, self._monotonic = request_get, sleep, monotonic
+        self.max_download_retries = max_download_retries
         self.download_interval_seconds = max(0.0, download_interval_seconds)
-        self._has_started_download = False
+        self._next_download_at: float | None = None
     def run(self) -> dict[str, int]:
         google, guard = GooglePhotosClient(), GoogleDeduplicationGuard(self.database)
         totals = {"albums": 0, "uploaded": 0, "skipped": 0, "reconcile_required": 0, "empty_or_uninventoried_albums": 0}
@@ -76,15 +78,17 @@ class MigrationService:
                 LOG.warning("flickr_download_retry", extra={"flickr_id": photo["flickr_id"], "delay_seconds": delay})
                 self._sleep(delay)
                 # The retry delay itself is longer than normal pacing.
-                self._has_started_download = False
+                self._next_download_at = None
         raise RuntimeError(f"Download retries exhausted for {photo['flickr_id']}")
 
     def _wait_for_download_slot(self) -> None:
-        """Keep requests to Flickr's original-file CDN deliberately steady."""
-        if self._has_started_download and self.download_interval_seconds:
-            LOG.info("flickr_download_pacing", extra={"delay_seconds": self.download_interval_seconds})
-            self._sleep(self.download_interval_seconds)
-        self._has_started_download = True
+        """Keep a minimum interval between request starts, not completions."""
+        if self._next_download_at is not None:
+            delay = max(0.0, self._next_download_at - self._monotonic())
+            if delay:
+                LOG.info("flickr_download_pacing", extra={"delay_seconds": delay})
+                self._sleep(delay)
+        self._next_download_at = self._monotonic() + self.download_interval_seconds
 
     def _wait_before_download_retry(self, response: requests.Response, attempt: int, flickr_id: str) -> None:
         """Back off original-file requests without treating a 429 as fatal."""
@@ -97,4 +101,4 @@ class MigrationService:
         LOG.warning("flickr_download_retry", extra={"flickr_id": flickr_id, "delay_seconds": delay})
         self._sleep(delay)
         # The cooldown replaces the ordinary inter-file delay for this retry.
-        self._has_started_download = False
+        self._next_download_at = None
