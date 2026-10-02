@@ -202,7 +202,10 @@ class MigrationApp:
                 self.inventory_workers.get(), progress
             )
             from .migrate import MigrationService
-            return MigrationService(self.database, self.settings.download_dir).run()
+            return MigrationService(
+                self.database, self.settings.download_dir,
+                download_interval_seconds=self.settings.download_interval_seconds,
+            ).run()
         self._background("Refreshing approved albums, then migrating", operation, shows_inventory_progress=True)
 
     def refresh(self) -> None:

@@ -126,3 +126,36 @@ def test_download_retries_a_temporary_network_failure(tmp_path):
     assert result.read_bytes() == b"original"
     assert len(waits) == 1
     assert 15 <= waits[0] < 16
+
+
+def test_download_paces_consecutive_flickr_file_requests(tmp_path):
+    class Database:
+        def set_local_file(self, *_args):
+            pass
+
+    class Response:
+        status_code, headers = 200, {}
+
+        def __init__(self, body: bytes):
+            self.raw = BytesIO(body)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def raise_for_status(self):
+            pass
+
+    responses = iter([Response(b"one"), Response(b"two")])
+    waits: list[float] = []
+    service = MigrationService(
+        Database(), tmp_path, request_get=lambda *_args, **_kwargs: next(responses),
+        sleep=waits.append, download_interval_seconds=5,
+    )
+    first = {"flickr_id": "one", "filename": "one.jpg", "local_path": None, "original_url": "https://example.test/one"}
+    second = {"flickr_id": "two", "filename": "two.jpg", "local_path": None, "original_url": "https://example.test/two"}
+    service._download(first)
+    service._download(second)
+    assert waits == [5]

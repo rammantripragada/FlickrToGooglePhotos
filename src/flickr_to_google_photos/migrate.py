@@ -15,9 +15,20 @@ from .integrity import sha256_file
 LOG = logging.getLogger(__name__)
 
 class MigrationService:
-    def __init__(self, database: MigrationDatabase, download_dir: Path, *, request_get=requests.get, sleep=time.sleep, max_download_retries: int = 8) -> None:
+    def __init__(
+        self,
+        database: MigrationDatabase,
+        download_dir: Path,
+        *,
+        request_get=requests.get,
+        sleep=time.sleep,
+        max_download_retries: int = 8,
+        download_interval_seconds: float = 5.0,
+    ) -> None:
         self.database, self.download_dir = database, download_dir
         self._request_get, self._sleep, self.max_download_retries = request_get, sleep, max_download_retries
+        self.download_interval_seconds = max(0.0, download_interval_seconds)
+        self._has_started_download = False
     def run(self) -> dict[str, int]:
         google, guard = GooglePhotosClient(), GoogleDeduplicationGuard(self.database)
         totals = {"albums": 0, "uploaded": 0, "skipped": 0, "reconcile_required": 0, "empty_or_uninventoried_albums": 0}
@@ -44,6 +55,7 @@ class MigrationService:
         target = self.download_dir / f"{photo['flickr_id']}_{name}"; temporary = target.with_suffix(target.suffix + ".part")
         for attempt in range(self.max_download_retries + 1):
             try:
+                self._wait_for_download_slot()
                 with self._request_get(str(photo["original_url"]), stream=True, timeout=(15, 600)) as response:
                     if response.status_code == 429 or response.status_code >= 500:
                         if attempt >= self.max_download_retries:
@@ -63,7 +75,16 @@ class MigrationService:
                 delay = min(300.0, 15.0 * (2**attempt)) + random.random()
                 LOG.warning("flickr_download_retry", extra={"flickr_id": photo["flickr_id"], "delay_seconds": delay})
                 self._sleep(delay)
+                # The retry delay itself is longer than normal pacing.
+                self._has_started_download = False
         raise RuntimeError(f"Download retries exhausted for {photo['flickr_id']}")
+
+    def _wait_for_download_slot(self) -> None:
+        """Keep requests to Flickr's original-file CDN deliberately steady."""
+        if self._has_started_download and self.download_interval_seconds:
+            LOG.info("flickr_download_pacing", extra={"delay_seconds": self.download_interval_seconds})
+            self._sleep(self.download_interval_seconds)
+        self._has_started_download = True
 
     def _wait_before_download_retry(self, response: requests.Response, attempt: int, flickr_id: str) -> None:
         """Back off original-file requests without treating a 429 as fatal."""
@@ -75,3 +96,5 @@ class MigrationService:
         delay = max(server_delay, min(300.0, 60.0 * (2**attempt)))
         LOG.warning("flickr_download_retry", extra={"flickr_id": flickr_id, "delay_seconds": delay})
         self._sleep(delay)
+        # The cooldown replaces the ordinary inter-file delay for this retry.
+        self._has_started_download = False

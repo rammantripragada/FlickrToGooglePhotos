@@ -180,7 +180,10 @@ def main(argv: list[str] | None = None) -> None:
             print(json.dumps(result, sort_keys=True)); return
         if args.command == "migrate":
             from .migrate import MigrationService
-            result = MigrationService(database, settings.download_dir).run()
+            result = MigrationService(
+                database, settings.download_dir,
+                download_interval_seconds=settings.download_interval_seconds,
+            ).run()
             print(json.dumps(result, sort_keys=True))
             return
     except (ConfigurationError, RuntimeError) as error:
