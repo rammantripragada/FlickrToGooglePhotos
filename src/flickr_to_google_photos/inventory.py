@@ -130,7 +130,7 @@ def import_archive_metadata(database: MigrationDatabase, archive_part: Path) -> 
         for zip_path in zip_paths:
             with ZipFile(zip_path) as archive:
                 names = archive.namelist()
-                if "account_profile.json" not in names:
+                if not ("account_profile.json" in names or "albums.json" in names or any(name.startswith("photo_") and name.endswith(".json") for name in names)):
                     continue
                 if profile is None:
                     profile = json.loads(archive.read("account_profile.json"))
