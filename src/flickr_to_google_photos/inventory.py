@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
+import json
+from pathlib import Path
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 
 from .database import MigrationDatabase
 from .flickr import FlickrClient, parse_album, parse_photo
+from .flickr import FlickrAlbum, FlickrPhoto
 
 LOG = logging.getLogger(__name__)
 
@@ -109,3 +112,60 @@ class InventoryService:
             self.database.replace_album_membership(str(album["flickr_id"]), [str(item["id"]) for item in listed])
             if progress: progress("approved albums", album_number, len(albums))
         return self.database.summary()
+
+
+def import_archive_metadata(database: MigrationDatabase, archive_part: Path) -> dict[str, int]:
+    """Import Flickr Data JSON from all sibling ``*_partN`` folders, offline."""
+    root = archive_part.expanduser().resolve()
+    if not root.is_dir():
+        raise RuntimeError(f"Archive folder does not exist: {root}")
+    prefix = root.name.rsplit("_part", 1)[0]
+    parts = sorted(path for path in root.parent.glob(f"{prefix}_part*") if path.is_dir())
+    if not parts:
+        parts = [root]
+    profile_path = next((part / "account_profile.json" for part in parts if (part / "account_profile.json").is_file()), None)
+    if not profile_path:
+        raise RuntimeError("No account_profile.json found in the Flickr archive folders.")
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    nsid = str(profile["nsid"])
+    database.initialize()
+    database.upsert_account(nsid, profile.get("screen_name"), profile.get("real_name"))
+    albums: dict[str, dict] = {}
+    imported_photo_ids: set[str] = set()
+    for part in parts:
+        album_path = part / "albums.json"
+        if album_path.is_file():
+            for raw in json.loads(album_path.read_text(encoding="utf-8")).get("albums", []):
+                albums[str(raw["id"])] = raw
+        for path in part.glob("photo_*.json"):
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            imported_photo_ids.add(str(raw["id"]))
+            original = raw.get("original")
+            filename = Path(str(original)).name if original else raw.get("name")
+            tags = [str(tag.get("name") if isinstance(tag, dict) else tag) for tag in raw.get("tags", [])]
+            geo = raw.get("geo") or []
+            location = geo[0] if geo and isinstance(geo[0], dict) else {}
+            extension = Path(str(filename or "")).suffix.lower()
+            media_type = "video" if extension in {".mp4", ".mov", ".avi", ".mkv", ".m4v"} else "photo"
+            photo = FlickrPhoto(str(raw["id"]), filename, raw.get("name"), raw.get("description"), tags,
+                raw.get("date_taken"), raw.get("date_imported"),
+                _number(location.get("latitude")), _number(location.get("longitude")), _integer(location.get("accuracy")),
+                original, extension.lstrip(".") or None, media_type, raw)
+            database.upsert_photo(nsid, photo)
+    for album_id, raw in albums.items():
+        database.upsert_album(nsid, FlickrAlbum(album_id, raw.get("title") or "Untitled Flickr album", raw.get("description"), _integer(raw.get("photo_count")), raw))
+        # A single archive part only contains a slice of photo JSON.  Keep the
+        # memberships whose metadata is available; rerunning after all parts
+        # arrive expands the same album deterministically.
+        database.replace_album_membership(album_id, [str(photo_id) for photo_id in raw.get("photos", []) if str(photo_id) in imported_photo_ids])
+    return database.summary()
+
+
+def _number(value: object) -> float | None:
+    try: return float(value) if value not in (None, "") else None
+    except (TypeError, ValueError): return None
+
+
+def _integer(value: object) -> int | None:
+    try: return int(value) if value not in (None, "") else None
+    except (TypeError, ValueError): return None

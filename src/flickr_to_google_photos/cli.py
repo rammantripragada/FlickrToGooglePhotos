@@ -38,6 +38,9 @@ def build_parser() -> argparse.ArgumentParser:
     selected_inventory = subparsers.add_parser("inventory-selected", help="inventory only approved album members")
     _database_argument(selected_inventory)
     selected_inventory.add_argument("--workers", type=int, help="concurrent Flickr detail requests")
+    archive = subparsers.add_parser("import-archive", help="import Flickr Data JSON metadata without Flickr API calls")
+    _database_argument(archive)
+    archive.add_argument("archive_part", type=Path, help="one extracted Flickr Data ..._partN folder")
     selection = inventory.add_mutually_exclusive_group()
     selection.add_argument("--all-albums", action="store_true", help="select every discovered album for the future migration")
     selection.add_argument("--album", action="append", default=[], metavar="FLICKR_ID", help="select one album; repeat for multiple")
@@ -178,6 +181,9 @@ def main(argv: list[str] | None = None) -> None:
             if not token: raise ConfigurationError("Run `flickr-gphotos auth-flickr` first.")
             result = InventoryService(FlickrClient(key, secret, token), database).run_selected_albums(args.workers or settings.inventory_workers)
             print(json.dumps(result, sort_keys=True)); return
+        if args.command == "import-archive":
+            from .inventory import import_archive_metadata
+            print(json.dumps(import_archive_metadata(database, args.archive_part), sort_keys=True)); return
         if args.command == "migrate":
             from .migrate import MigrationService
             result = MigrationService(
