@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import json
 from pathlib import Path
+from zipfile import ZipFile
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 
@@ -119,6 +120,29 @@ def import_archive_metadata(database: MigrationDatabase, archive_part: Path) -> 
     root = archive_part.expanduser().resolve()
     if not root.is_dir():
         raise RuntimeError(f"Archive folder does not exist: {root}")
+    zip_paths = sorted(root.glob("*.zip"))
+    if zip_paths:
+        # Flickr account-data ZIPs contain account_profile.json; media ZIPs do
+        # not, so they are naturally ignored here.
+        profile: dict | None = None
+        albums: dict[str, dict] = {}
+        photos: list[dict] = []
+        for zip_path in zip_paths:
+            with ZipFile(zip_path) as archive:
+                names = archive.namelist()
+                if "account_profile.json" not in names:
+                    continue
+                if profile is None:
+                    profile = json.loads(archive.read("account_profile.json"))
+                if "albums.json" in names:
+                    for raw in json.loads(archive.read("albums.json")).get("albums", []):
+                        albums[str(raw["id"])] = raw
+                for name in names:
+                    if name.startswith("photo_") and name.endswith(".json"):
+                        photos.append(json.loads(archive.read(name)))
+        if profile is None:
+            raise RuntimeError("No Flickr account-data ZIPs found (expected account_profile.json).")
+        return _store_archive_records(database, profile, albums, photos)
     prefix = root.name.rsplit("_part", 1)[0]
     parts = sorted(path for path in root.parent.glob(f"{prefix}_part*") if path.is_dir())
     if not parts:
@@ -169,3 +193,26 @@ def _number(value: object) -> float | None:
 def _integer(value: object) -> int | None:
     try: return int(value) if value not in (None, "") else None
     except (TypeError, ValueError): return None
+
+
+def _store_archive_records(database: MigrationDatabase, profile: dict, albums: dict[str, dict], records: list[dict]) -> dict[str, int]:
+    """Store metadata read directly from Flickr account-data ZIP members."""
+    nsid = str(profile["nsid"])
+    database.initialize()
+    database.upsert_account(nsid, profile.get("screen_name"), profile.get("real_name"))
+    imported: set[str] = set()
+    for raw in records:
+        photo_id = str(raw["id"]); imported.add(photo_id)
+        original = raw.get("original")
+        filename = Path(str(original)).name if original else raw.get("name")
+        extension = Path(str(filename or "")).suffix.lower()
+        media_type = "video" if extension in {".mp4", ".mov", ".avi", ".mkv", ".m4v"} else "photo"
+        tags = [str(tag.get("name") if isinstance(tag, dict) else tag) for tag in raw.get("tags", [])]
+        geo = raw.get("geo") or []; location = geo[0] if geo and isinstance(geo[0], dict) else {}
+        database.upsert_photo(nsid, FlickrPhoto(photo_id, filename, raw.get("name"), raw.get("description"), tags,
+            raw.get("date_taken"), raw.get("date_imported"), _number(location.get("latitude")), _number(location.get("longitude")),
+            _integer(location.get("accuracy")), original, extension.lstrip(".") or None, media_type, raw))
+    for album_id, raw in albums.items():
+        database.upsert_album(nsid, FlickrAlbum(album_id, raw.get("title") or "Untitled Flickr album", raw.get("description"), _integer(raw.get("photo_count")), raw))
+        database.replace_album_membership(album_id, [str(item) for item in raw.get("photos", []) if str(item) in imported])
+    return database.summary()
