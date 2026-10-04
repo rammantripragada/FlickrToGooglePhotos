@@ -5,7 +5,9 @@
 set -euo pipefail
 
 first_url="${1:-}"
-destination="/Volumes/T7/FlickrData"
+destination="${FLICKR_ARCHIVE_DESTINATION:-/Volumes/T7/FlickrData}"
+# Colon-separated folders containing ZIPs already completed on other disks.
+existing_dirs="${FLICKR_ARCHIVE_EXISTING_DIRS:-}"
 archive_count=486
 parallel_jobs="${2:-3}"
 
@@ -17,8 +19,8 @@ if [[ ! "$parallel_jobs" =~ '^[1-4]$' ]]; then
   print -u2 "parallel_jobs must be a number from 1 to 4 (default: 3)."
   exit 2
 fi
-if [[ ! -d /Volumes/T7 ]]; then
-  print -u2 "T7 is not mounted at /Volumes/T7. Connect and unlock it, then retry."
+if [[ ! -d "${destination:h}" ]]; then
+  print -u2 "Destination volume is not mounted: ${destination:h}"
   exit 2
 fi
 
@@ -35,6 +37,12 @@ download_one() {
     print "[$number/$archive_count] Already downloaded: $filename"
     continue
   fi
+  for existing_dir in ${(s/:/)existing_dirs}; do
+    if [[ -s "$existing_dir/$filename" ]]; then
+      print "[$number/$archive_count] Already downloaded on another disk: $filename"
+      return
+    fi
+  done
   print "[$number/$archive_count] Downloading: $filename"
   curl --fail --location --retry 8 --retry-all-errors --retry-delay 5 \
     --connect-timeout 30 --continue-at - --output "$partial_path" "$url"
