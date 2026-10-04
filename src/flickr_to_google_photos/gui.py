@@ -22,12 +22,12 @@ LOG = logging.getLogger(__name__)
 
 
 class MigrationApp:
-    def __init__(self, root, settings: Settings) -> None:
+    def __init__(self, root, settings: Settings, archive_only: bool = False) -> None:
         import tkinter as tk
         from tkinter import ttk
 
         self.tk, self.ttk, self.root, self.settings = tk, ttk, root, settings
-        self.database = MigrationDatabase(settings.database_path)
+        self.database, self.archive_only = MigrationDatabase(settings.database_path), archive_only
         self.database.initialize()
         self.album_sort_column = "title"
         self.album_sort_reverse = False
@@ -53,6 +53,16 @@ class MigrationApp:
         frame = self.ttk.Frame(notebook, padding=16)
         notebook.add(frame, text="Setup")
         self.ttk.Label(frame, text="Flickr → Google Photos", font=("TkDefaultFont", 18, "bold")).pack(anchor="w")
+        if self.archive_only:
+            self.ttk.Label(frame, justify="left", wraplength=700, text=(
+                "Archive-only migration mode. Import Flickr account-data ZIPs locally; no Flickr login, API inventory, or direct Flickr downloads are used."
+            )).pack(anchor="w", pady=16)
+            self.archive_path = self.tk.StringVar()
+            self.ttk.Label(frame, text="Metadata ZIP folder:").pack(anchor="w")
+            self.ttk.Entry(frame, textvariable=self.archive_path, width=80).pack(anchor="w", pady=(2, 8))
+            self.ttk.Button(frame, text="Import metadata ZIPs", command=self.import_archive).pack(anchor="w")
+            self.ttk.Label(frame, text=f"Database: {self.settings.database_path}").pack(anchor="w", pady=(16, 0))
+            return
         self.ttk.Label(frame, justify="left", wraplength=700, text=(
             "Phase 1 safely inventories Flickr photos, videos, and albums into local SQLite. "
             "OAuth tokens are stored in macOS Keychain. Google uploads and all destructive operations remain unavailable.\n\n"
@@ -93,13 +103,22 @@ class MigrationApp:
         self.task_tree.pack(fill="x")
         buttons = self.ttk.Frame(frame)
         buttons.pack(anchor="w", pady=18)
-        self.ttk.Button(buttons, text="Run Flickr Inventory", command=self.run_inventory).pack(side="left")
-        self.ttk.Button(buttons, text="Inventory approved albums only", command=self.run_selected_inventory).pack(side="left", padx=8)
-        self.ttk.Button(buttons, text="Migrate approved albums", command=self.migrate_approved).pack(side="left", padx=8)
+        if not self.archive_only:
+            self.ttk.Button(buttons, text="Run Flickr Inventory", command=self.run_inventory).pack(side="left")
+            self.ttk.Button(buttons, text="Inventory approved albums only", command=self.run_selected_inventory).pack(side="left", padx=8)
+            self.ttk.Button(buttons, text="Migrate approved albums", command=self.migrate_approved).pack(side="left", padx=8)
         self.ttk.Button(buttons, text="Refresh Local Status", command=self.refresh).pack(side="left", padx=8)
-        self.ttk.Label(frame, text=(
-            "Inventory reads Flickr only. When complete, use Albums to choose the set that may be migrated later."
-        ), wraplength=700).pack(anchor="w")
+        self.ttk.Label(frame, text=("Archive metadata is local and safe to import repeatedly." if self.archive_only else "Inventory reads Flickr only. When complete, use Albums to choose the set that may be migrated later."), wraplength=700).pack(anchor="w")
+
+    def import_archive(self) -> None:
+        path = Path(self.archive_path.get()).expanduser()
+        if not path.is_dir():
+            self.status_text.set("Choose a folder containing Flickr account-data ZIPs.")
+            return
+        def operation():
+            from .inventory import import_archive_metadata
+            return import_archive_metadata(self.database, path)
+        self._background("Importing local Flickr metadata ZIPs", operation)
 
     def _albums_tab(self, notebook) -> None:
         frame = self.ttk.Frame(notebook, padding=16)
@@ -213,7 +232,8 @@ class MigrationApp:
         self.summary_text.set("\n".join(f"{key.replace('_', ' ').title()}: {value}" for key, value in summary.items()))
         self.load_albums()
         self.load_duplicates()
-        self._refresh_authorization_state()
+        if not self.archive_only:
+            self._refresh_authorization_state()
 
     def _set_authorized_state(self) -> None:
         self.auth_button.configure(text="Flickr authorized ✓", style="Authorized.TButton")
@@ -326,7 +346,7 @@ class MigrationApp:
         self.root.after(100, self._drain_events)
 
 
-def launch(settings: Settings | None = None) -> None:
+def launch(settings: Settings | None = None, archive_only: bool = False) -> None:
     try:
         import tkinter as tk
     except ImportError as error:
@@ -335,5 +355,5 @@ def launch(settings: Settings | None = None) -> None:
     from .logging import configure_logging
     configure_logging(active_settings.log_level, active_settings.log_file)
     root = tk.Tk()
-    MigrationApp(root, active_settings)
+    MigrationApp(root, active_settings, archive_only=archive_only)
     root.mainloop()

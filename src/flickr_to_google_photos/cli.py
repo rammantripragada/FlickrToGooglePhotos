@@ -57,6 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
     albums.add_argument("--all", action="store_true", help="select every album without prompting")
     albums.add_argument("--select", action="append", default=[], metavar="FLICKR_ID", help="select one album; repeat for multiple")
     subparsers.add_parser("gui", help="launch the native desktop interface")
+    subparsers.add_parser("archive-gui", help="launch archive-only metadata interface (no Flickr login)")
     return parser
 
 
@@ -95,6 +96,10 @@ def main(argv: list[str] | None = None) -> None:
         if args.command == "gui":
             from .gui import launch
             launch(settings)
+            return
+        if args.command == "archive-gui":
+            from .gui import launch
+            launch(settings, archive_only=True)
             return
         if args.command == "auth-flickr":
             key, secret = settings.require_flickr()
