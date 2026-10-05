@@ -2,7 +2,45 @@
 
 `flickr-to-google-photos` is a safety-first, resumable migration application for a large Flickr library. It inventories Flickr into a durable local SQLite database before it ever downloads or uploads a byte.
 
-**Current release: Phase 1 — Flickr inventory.** It supports read-only Flickr OAuth, identifies the authenticated account, enumerates all accessible photos and albums with pagination, retrieves detailed photo metadata and the largest permitted source URL, and records a restartable inventory. Downloading and Google Photos uploads are intentionally not implemented yet.
+**Current release includes archive migration.** Import Flickr Data metadata ZIPs and index photo/video ZIPs locally, select albums, then upload to Google Photos from the archives. The original Flickr OAuth inventory commands remain available.
+
+## Archive workflow (recommended for large libraries)
+
+Keep the metadata ZIPs in one directory. Media ZIPs may stay on several disks; no full extraction is required.
+
+```zsh
+cd ~/FlickrToGooglePhotos
+source .venv/bin/activate
+flickr-gphotos import-archive ~/Downloads/FlickrMetadata
+flickr-gphotos index-archive-media '/Volumes/T7/FlickrData' '/Volumes/T7 1/FlickrData'
+flickr-gphotos archive-gui
+```
+
+In **Albums**, check each album to migrate. The **Migration** tab shows selected albums, local indexed media, confirmed Google album membership, item counts and percentages. Authorize Google Photos there, choose a working directory with enough space for the largest selected file, and click **Check local readiness**. Then click **Migrate selected albums / Resume**. **Pause** preserves progress; a current network request may take time to finish before stopping.
+
+The tab includes live extraction and upload byte progress, retries, errors, and a link to the actual Google album. Albums shows persistent Google status and completed membership counts after restarting the app. Metadata imports preserve those membership states.
+
+CLI equivalents:
+
+```zsh
+flickr-gphotos migrate-archive --dry-run
+flickr-gphotos auth-google
+flickr-gphotos migrate-archive --work-dir '/path/with/free/space/FlickrWork'
+```
+
+The dry run checks local metadata and archive availability without Google requests or extraction. Migration refuses to start if selected albums have missing source members or incomplete metadata. It uses local ZIP entries exclusively; it never falls back to a Flickr URL.
+
+### Space, deduplication and recovery
+
+Only one media item is extracted at a time. Extraction reads the complete ZIP member to check its CRC and calculates SHA-256. The original bytes and embedded EXIF are preserved. Confirmed successful working copies are removed automatically; source ZIPs and existing download files outside the working directory are never deleted. Failed or paused working copies may remain for resumption. Keep the ZIP disks connected while migrating.
+
+Exact SHA-256 matches reuse a confirmed Google media ID, even for different Flickr IDs. One photo/video can be added to multiple Google albums without uploading another copy. The migration journal tracks Google album membership separately from upload state. Deduplication cannot checksum the user's entire pre-existing Google Photos library; it covers known uploads managed by this tool.
+
+Google byte transfers use resumable sessions. Session URLs, upload tokens and content checksums are journaled in the ignored SQLite database; OAuth credentials remain in Keychain. After interruption, Google is queried for its received byte offset. Album and media creation run serially. API batches stay within 50 items; an album cannot exceed 20,000 members. Photos are limited to 200 MB, videos to 20 GB. See [Google uploads](https://developers.google.com/photos/library/guides/upload-media) and [resumable uploads](https://developers.google.com/photos/library/guides/resumable-uploads).
+
+The app stores creation intent before making a Google create request. A saved, unexpired upload token can be reused for the same bytes. If an ambiguous media-create token has expired, the item is blocked for reconciliation to avoid blindly creating a duplicate. An interrupted album-create response is also blocked for reconciliation; do not clear state or rerun a different database to bypass it. Three consecutive item failures stop migration so disk, authorization or API errors do not cause thousands of repeated failures.
+
+The app reuses its saved Google album ID when resuming; existing linked destinations are not renamed. New destinations use `FlickrTitle_flickr`, then `FlickrTitle_flickr_1`, `_flickr_2`, etc. if an accessible album already has that name; an unlinked same-name album is never silently reused. The app checks all pages of app-created Google albums once per migration and also reserves names for albums it creates during that run. Google's API cannot see manually-created/other-app albums under these scopes, so it cannot guarantee unique names across that invisible part of the library. User-written media descriptions are sent (up to Google's 1,000-character limit). Flickr album descriptions, tags, GPS and dates remain in SQLite/raw archive JSON; embedded EXIF is retained in the uploaded bytes. The Google API does not provide equivalent writable fields for every Flickr attribute.
 
 ## Safety model
 
@@ -11,7 +49,7 @@
 - OAuth access tokens live in the macOS Keychain through `keyring`; neither SQLite nor Git contains them.
 - `.env`, local databases, downloads, logs, and credentials are ignored by Git.
 - SQLite uses WAL mode, foreign keys, short transactions, and idempotent upserts. Re-running inventory resumes/refreshes known rows instead of duplicating them.
-- Later download and upload phases will change a state only after the external side effect has been confirmed. An interrupted operation will be reconciled rather than assumed successful.
+- Download and upload states advance only after verification or a confirmed Google response. An interrupted operation is resumed or blocked for reconciliation rather than assumed successful.
 
 ## Phase 1 capabilities
 
@@ -54,7 +92,7 @@ flickr-gphotos gui
 flickr-gphotos-gui
 ```
 
-The GUI provides read-only Flickr authorization and inventory controls, a visual album-selection table, current status, and duplicate reports. Authorization changes to a green **Flickr authorized ✓** state after completion. Inventory work runs in the background with a graphical percentage meter, current stage, and completed/total photo-video or album counts, so the window remains responsive. It has no upload, delete, or Google Photos mutation controls.
+The original GUI provides Flickr authorization and inventory controls. The `archive-gui` interface uses local metadata and ZIPs and includes Google authorization and migration controls. Both have album checkboxes, status, and duplicate reports; no remote delete controls are implemented.
 
 ## Flickr application and OAuth setup
 
@@ -133,14 +171,15 @@ The default `flickr-to-google-photos.sqlite3` contains these main tables:
 - `flickr_album` — Flickr photosets and a reserved Google album ID field
 - `flickr_album_photo` — ordered many-to-many album membership
 
-The schema already reserves the following crash-recovery states for later phases:
+The migration tracks separate crash-recovery states:
 
 ```text
 download: discovered → downloading → downloaded → verified
 upload:   not_started → uploading → uploaded
+membership: pending → added (or failed/reconcile)
 ```
 
-The process never treats an item as verified or uploaded solely because it was attempted. On a future restart, stale in-progress state will be reconciled with the file checksum or destination API result before advancing.
+The process never treats an item as verified or uploaded solely because it was attempted. `archive_media` stores ZIP paths and member names; `google_upload_journal` persists resumable transfer state. On restart, existing Google IDs are reused, retained local files are verified against their checksum, and Google transfer sessions are queried before advancing.
 
 ## Duplicate detection
 
@@ -153,22 +192,22 @@ flickr-gphotos duplicates --json
 
 This does **not** delete, move, or de-duplicate anything. It reports two distinct cases:
 
-- `album_membership_duplicates`: one Flickr media ID belongs to multiple albums. This is normally intentional and lets the later Google phase preserve album membership.
-- `content_duplicates`: two or more distinct Flickr IDs have the same verified SHA-256 checksum. This report becomes available after the planned download/verify phase; it detects byte-identical photos or videos without trusting filenames or metadata.
+- `album_membership_duplicates`: one Flickr media ID belongs to multiple albums. This is normally intentional and the Google phase preserves album membership without another upload.
+- `content_duplicates`: two or more distinct Flickr IDs have the same verified SHA-256 checksum. This report becomes available as migration verifies files; it detects byte-identical photos or videos without trusting filenames or metadata.
 
-## Google Photos plan (not yet enabled)
+## Google Photos setup
 
-Before Phase 2, create a Google Cloud project and configure OAuth according to the [Google Photos Library API setup](https://developers.google.com/photos/library/guides/get-started). Google Photos now limits Library API management to media and albums created by the app, so this project will create corresponding new destination albums; it will not manage pre-existing Google Photos albums. [Google’s current API update](https://developers.google.com/photos/support/updates)
+Create a Google Cloud project, enable the **Photos Library API**, and configure OAuth according to the [Google Photos application setup](https://developers.google.com/photos/overview/configure-your-app). Create an OAuth **Desktop app** client and download its JSON to `credentials/google-client.json`, or set `GOOGLE_CLIENT_SECRETS_FILE` in `.env` to its path. Do not commit this file. When your consent configuration is in testing mode, your Google account must be approved as a test user.
 
-The planned upload layer will use `photoslibrary.appendonly`, Google’s two-step upload flow, serial `batchCreate` operations per user, API-sized batches (up to 50), and persisted Google media/album IDs. It will also explicitly reconcile the small ambiguous window where a process dies after a remote request succeeds but before SQLite records its response.
+Run `flickr-gphotos auth-google` or click **Authorize Google Photos** in Migration. The tool requests `photoslibrary.appendonly` for creation and `photoslibrary.readonly.appcreateddata` for checking its albums. Keep using the same Google account and OAuth client ID throughout migration. Resources created under one client ID cannot be managed using a different client ID. API uploads are original quality and count against Google account storage. Google Photos limits Library API management to media and albums created by this app; it cannot append to your manually-created albums. [Google’s current API update](https://developers.google.com/photos/support/updates)
 
 ### Google duplicate protection
 
-The upload layer has a non-destructive `GoogleDeduplicationGuard` ready for integration. Before any Google create request, it checks the migration journal: a Flickr item with an existing Google media ID is skipped, and an item left in `uploading` by a crash is blocked for reconciliation instead of retried blindly. This prevents the migration itself from creating duplicate Google items.
+Before any Google create request, archive migration checks the stored Flickr media ID, confirmed SHA-256 matches and the upload journal. An item left in ambiguous `uploading` state is resumed with its still-valid token or blocked for reconciliation instead of retried blindly. Albums store the destination ID so resuming does not generate another suffixed destination.
 
 Google's current API can list only media created by this app, not the user’s whole pre-existing Google Photos library. Consequently, the application will not claim an exact duplicate match against pre-existing Google photos or videos. It will audit app-created items and report candidates, but will never delete Google content automatically.
 
-## CLI reference (Phase 1)
+## CLI reference
 
 ```text
 flickr-gphotos auth-flickr [--callback-url URL] [--manual-verifier]
@@ -176,12 +215,18 @@ flickr-gphotos inventory [--database PATH] [--dry-run] [--no-photo-details] [--w
                          [--all-albums | --album FLICKR_ID | --no-album-selection]
 flickr-gphotos albums [--database PATH] [--all | --select FLICKR_ID]
 flickr-gphotos gui
+flickr-gphotos archive-gui
+flickr-gphotos import-archive METADATA_DIRECTORY [--database PATH]
+flickr-gphotos index-archive-media MEDIA_DIRECTORY [MEDIA_DIRECTORY ...] [--database PATH]
+flickr-gphotos auth-google
+flickr-gphotos migrate-archive [--database PATH] [--dry-run] [--work-dir PATH]
+flickr-gphotos migrate [--database PATH]  # legacy direct-Flickr download workflow
 flickr-gphotos status [--database PATH] [--json]
 flickr-gphotos report [--database PATH] [--json]
 flickr-gphotos duplicates [--database PATH] [--json]
 ```
 
-Planned, but intentionally unavailable until their safety tests are implemented: `download`, `verify`, `auth-google`, `upload`, `albums`, and `retry-failed`.
+Archive migration includes extraction, verification and uploading. Standalone `download`, `verify`, `upload`, and `retry-failed` commands are not provided; use **Migrate selected albums / Resume** to retry safe failures with the same database.
 
 ## Testing
 
@@ -191,7 +236,7 @@ Tests do not use real Flickr, Google, or OAuth credentials:
 pytest -q
 ```
 
-Phase 1 tests cover Flickr metadata parsing, multi-page photo discovery, SQLite idempotency/state preservation, album membership replacement, and repeated inventory. Google-client mock tests will arrive with the Google upload implementation in Phase 2, rather than testing an API client that does not exist yet.
+Tests cover Flickr metadata parsing and pagination, SQLite state preservation, archive filename matching, photo/video extraction, checksum deduplication across albums, persistent membership, pause/resume, ambiguous creation guards, mocked resumable Google uploads, paginated album-name checks and suffix collision handling. GUI progress handlers are tested without a display or credentials.
 
 ## Troubleshooting
 
@@ -202,6 +247,16 @@ Phase 1 tests cover Flickr metadata parsing, multi-page photo discovery, SQLite 
 **Rate limiting or temporary Flickr errors** — the client retries safe read calls. Run `inventory` again after a prolonged outage; upserts make that safe.
 
 **Interrupted inventory** — simply run `flickr-gphotos inventory` again. Discovery is idempotent and no remote content was changed.
+
+**Missing local media** — connect every archive disk, refresh ZIP indexing, and check local readiness. Do not expand all archives. An indexed ZIP must remain accessible at its recorded path.
+
+**Not enough working space** — choose a working folder on a disk with space for the largest selected file plus a safety margin. Only managed successful temporary copies are removed, never source ZIPs.
+
+**Google authorization expired or access blocked** — authorize again using the original client and account. Check that the account is approved for testing if your consent configuration is still in testing mode. Migration progress stays in SQLite.
+
+**Reconciliation required** — do not clear the database or create another migration database. An uncertain create request may already have succeeded. Confirm the destination album/media ID before changing its mapping; expired ambiguous creation state is intentionally not retried automatically.
+
+**Application logs** — structured events and exception tracebacks are written to `logs/flickr-gphotos.jsonl` by default (`MIGRATOR_LOG_FILE` overrides this). Upload session URLs and tokens are not included in structured events; keep the SQLite database private because it contains transfer credentials.
 
 **A photo has no original URL** — Flickr did not permit an original. The database stores Flickr’s largest returned source URL instead; review these before enabling the download phase.
 

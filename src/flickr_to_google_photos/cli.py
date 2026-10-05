@@ -1,4 +1,4 @@
-"""Command-line entry point for Phase 1 (read-only Flickr inventory)."""
+"""Command-line entry point for Flickr inventory and local archive migration."""
 
 from __future__ import annotations
 
@@ -30,6 +30,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("auth-google", help="authorize Google Photos uploads")
     migrate = subparsers.add_parser("migrate", help="create approved Google albums and copy their media")
     _database_argument(migrate)
+    archive_migration = subparsers.add_parser("migrate-archive", help="upload selected albums from local indexed ZIPs")
+    _database_argument(archive_migration)
+    archive_migration.add_argument("--dry-run", action="store_true", help="check local selected-album readiness without Google writes")
+    archive_migration.add_argument("--work-dir", type=Path, help="temporary one-item extraction folder")
     inventory = subparsers.add_parser("inventory", help="discover Flickr photos and albums into SQLite")
     _database_argument(inventory)
     inventory.add_argument("--dry-run", action="store_true", help="count source items without changing SQLite")
@@ -40,7 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     selected_inventory.add_argument("--workers", type=int, help="concurrent Flickr detail requests")
     archive = subparsers.add_parser("import-archive", help="import Flickr Data JSON metadata without Flickr API calls")
     _database_argument(archive)
-    archive.add_argument("archive_part", type=Path, help="one extracted Flickr Data ..._partN folder")
+    archive.add_argument("archive_part", type=Path, help="directory of metadata ZIPs or an extracted ..._partN folder")
     media = subparsers.add_parser("index-archive-media", help="index local Flickr media ZIPs without extracting them")
     _database_argument(media)
     media.add_argument("directories", nargs="+", type=Path, help="one or more directories containing media ZIPs")
@@ -202,6 +206,13 @@ def main(argv: list[str] | None = None) -> None:
                 download_interval_seconds=settings.download_interval_seconds,
             ).run()
             print(json.dumps(result, sort_keys=True))
+            return
+        if args.command == "migrate-archive":
+            from .archive_migrate import ArchiveMigrationService
+            database.initialize()
+            service = ArchiveMigrationService(database, args.work_dir or settings.download_dir / "archive-work",
+                progress=lambda event: print(json.dumps(event), file=sys.stderr, flush=True))
+            print(json.dumps(service.preflight() if args.dry_run else service.run(), sort_keys=True))
             return
     except (ConfigurationError, RuntimeError) as error:
         print(f"error: {error}", file=sys.stderr)

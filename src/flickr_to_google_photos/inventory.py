@@ -222,23 +222,49 @@ def _store_archive_records(database: MigrationDatabase, profile: dict, albums: d
 def index_archive_media(database: MigrationDatabase, directories: list[Path]) -> dict[str, int]:
     """Index Flickr media ZIP members locally; never extracts or contacts Flickr."""
     database.initialize()
-    pattern = re.compile(r"_(\d+)_o(?:\.[^/]+)$", re.IGNORECASE)
-    batch: list[tuple[str, str, str, int]] = []
+    # Match a numeric filename component only when it is a real inventoried ID.
+    # This covers <id>_<hash>_o.jpg, name_<id>_o.jpg and video_<id>.mov.
+    pattern = re.compile(r"(?<!\d)\d{7,}(?!\d)")
+    with database.connection() as conn:
+        known = {row[0] for row in conn.execute("SELECT flickr_id FROM flickr_photo")}
+    matched: dict[str, tuple[str, str, str, int]] = {}
     skipped_archives = 0
+    unknown_members = 0
+    archives_scanned = 0
     for directory in directories:
-        for zip_path in sorted(directory.expanduser().glob("*.zip")):
+        root = directory.expanduser().resolve()
+        if not root.is_dir():
+            raise RuntimeError(f"Media directory is unavailable: {root}")
+        for zip_path in sorted(root.glob("*.zip")):
+            if zip_path.name.startswith("._"):
+                continue
             try:
                 with ZipFile(zip_path) as archive:
+                    archives_scanned += 1
                     for member in archive.infolist():
-                        match = pattern.search(member.filename)
-                        if match and not member.is_dir():
-                            batch.append((match.group(1), str(zip_path), member.filename, member.file_size))
-                            if len(batch) >= 1000:
-                                database.upsert_archive_media(batch); batch.clear()
+                        name = Path(member.filename).name
+                        if member.is_dir() or name.startswith("._") or member.filename.startswith("__MACOSX/"):
+                            continue
+                        if not name.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".heic", ".heif", ".webp", ".tif", ".tiff", ".bmp", ".avif", ".raw", ".dng", ".nef", ".cr2", ".arw", ".mp4", ".mov", ".avi", ".mkv", ".m4v", ".3gp", ".wmv", ".mts", ".mpg", ".mpeg")):
+                            continue
+                        candidates = set(pattern.findall(name)) & known
+                        if len(candidates) != 1:
+                            unknown_members += 1
+                            continue
+                        flickr_id = candidates.pop()
+                        record = (flickr_id, str(zip_path), member.filename, member.file_size)
+                        previous = matched.get(flickr_id)
+                        if previous is None or ("_o." in name and "_o." not in previous[2]):
+                            matched[flickr_id] = record
             except BadZipFile:
                 skipped_archives += 1
                 LOG.warning("archive_zip_skipped", extra={"path": str(zip_path), "reason": "invalid_or_incomplete_zip"})
-    if batch: database.upsert_archive_media(batch)
+    records = list(matched.values())
+    for start in range(0, len(records), 1000):
+        database.upsert_archive_media(records[start:start + 1000])
     result = database.summary()
     result["archive_zips_skipped"] = skipped_archives
+    result["archive_zips_scanned"] = archives_scanned
+    result["archive_members_unmatched"] = unknown_members
+    result["metadata_without_archive"] = len(known - matched.keys())
     return result
