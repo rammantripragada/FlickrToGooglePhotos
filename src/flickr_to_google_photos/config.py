@@ -25,6 +25,9 @@ class Settings:
     inventory_workers: int
     download_interval_seconds: float
     google_client_secrets_file: Path
+    upload_workers: int = 4
+    album_workers: int = 2
+    google_batch_size: int = 50
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -40,6 +43,9 @@ class Settings:
             inventory_workers=max(1, min(12, int(os.getenv("MIGRATOR_INVENTORY_WORKERS", "5")))),
             download_interval_seconds=max(0.0, float(os.getenv("MIGRATOR_DOWNLOAD_INTERVAL_SECONDS", "5"))),
             google_client_secrets_file=Path(os.getenv("GOOGLE_CLIENT_SECRETS_FILE", "credentials/google-client.json")),
+            upload_workers=max(1, min(8, int(os.getenv("MIGRATOR_UPLOAD_WORKERS", "4")))),
+            album_workers=max(1, min(8, int(os.getenv("MIGRATOR_ALBUM_WORKERS", "2")))),
+            google_batch_size=max(1, min(50, int(os.getenv("MIGRATOR_GOOGLE_BATCH_SIZE", "50")))),
         )
 
     def require_flickr(self) -> tuple[str, str]:

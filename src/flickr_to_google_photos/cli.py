@@ -33,7 +33,10 @@ def build_parser() -> argparse.ArgumentParser:
     archive_migration = subparsers.add_parser("migrate-archive", help="upload selected albums from local indexed ZIPs")
     _database_argument(archive_migration)
     archive_migration.add_argument("--dry-run", action="store_true", help="check local selected-album readiness without Google writes")
-    archive_migration.add_argument("--work-dir", type=Path, help="temporary one-item extraction folder")
+    archive_migration.add_argument("--work-dir", type=Path, help="working folder for bounded temporary extractions")
+    archive_migration.add_argument("--workers", type=int, choices=range(1, 9), help="global parallel photo/video transfers (default: MIGRATOR_UPLOAD_WORKERS, 4)")
+    archive_migration.add_argument("--album-workers", type=int, choices=range(1, 9), help="active albums sharing the transfer pool (default: MIGRATOR_ALBUM_WORKERS, 2)")
+    archive_migration.add_argument("--batch-size", type=int, choices=range(1, 51), help="Google write batch limit (default: MIGRATOR_GOOGLE_BATCH_SIZE, 50)")
     inventory = subparsers.add_parser("inventory", help="discover Flickr photos and albums into SQLite")
     _database_argument(inventory)
     inventory.add_argument("--dry-run", action="store_true", help="count source items without changing SQLite")
@@ -211,6 +214,8 @@ def main(argv: list[str] | None = None) -> None:
             from .archive_migrate import ArchiveMigrationService
             database.initialize()
             service = ArchiveMigrationService(database, args.work_dir or settings.download_dir / "archive-work",
+                upload_workers=args.workers or settings.upload_workers, album_workers=args.album_workers or settings.album_workers,
+                batch_size=args.batch_size or settings.google_batch_size,
                 progress=lambda event: print(json.dumps(event), file=sys.stderr, flush=True))
             print(json.dumps(service.preflight() if args.dry_run else service.run(), sort_keys=True))
             return

@@ -16,27 +16,29 @@ flickr-gphotos index-archive-media '/Volumes/T7/FlickrData' '/Volumes/T7 1/Flick
 flickr-gphotos archive-gui
 ```
 
-In **Albums**, check each album to migrate. The **Migration** tab shows selected albums, local indexed media, confirmed Google album membership, item counts and percentages. Authorize Google Photos there, choose a working directory with enough space for the largest selected file, and click **Check local readiness**. Then click **Migrate selected albums / Resume**. **Pause** preserves progress; a current network request may take time to finish before stopping.
+In **Albums**, check each album to migrate. The **Migration** tab shows selected albums, local indexed media, confirmed Google album membership, item counts and percentages. Authorize Google Photos there, choose a working directory with enough space for concurrent staged files, and click **Check local readiness**. Set **Parallel uploads (total)**, **Parallel albums**, and **Google batch limit**, then click **Migrate selected albums / Resume**. **Pause** preserves progress; current network requests may take time to finish before stopping.
 
-The tab includes live extraction and upload byte progress, retries, errors, and a link to the actual Google album. Albums shows persistent Google status and completed membership counts after restarting the app. Metadata imports preserve those membership states.
+The tab includes separate progress for each active album and a live photo/video transfer table with byte counts, percentage and status. It also shows retries, errors, and a link to the actual Google album. Albums shows persistent Google status and completed membership counts after restarting the app. Metadata imports preserve those membership states.
 
 CLI equivalents:
 
 ```zsh
 flickr-gphotos migrate-archive --dry-run
 flickr-gphotos auth-google
-flickr-gphotos migrate-archive --work-dir '/path/with/free/space/FlickrWork'
+flickr-gphotos migrate-archive --workers 4 --album-workers 2 --batch-size 50 --work-dir '/path/with/free/space/FlickrWork'
 ```
 
 The dry run checks local metadata and archive availability without Google requests or extraction. Migration refuses to start if selected albums have missing source members or incomplete metadata. It uses local ZIP entries exclusively; it never falls back to a Flickr URL.
 
+Defaults are **4 total file workers**, **2 active albums**, and a **50-item Google write batch limit**. File and album limits accept 1–8, while batch limits accept 1–50. The global transfer limit is shared across albums: 4 workers and 2 albums means at most 4 file jobs, not 8. Configure defaults with `MIGRATOR_UPLOAD_WORKERS`, `MIGRATOR_ALBUM_WORKERS`, and `MIGRATOR_GOOGLE_BATCH_SIZE` in `.env`, or override them using the CLI/GUI. Albums share the pool with round-robin scheduling; shared Flickr IDs are deferred instead of occupying multiple transfer slots.
+
 ### Space, deduplication and recovery
 
-Only one media item is extracted at a time. Extraction reads the complete ZIP member to check its CRC and calculates SHA-256. The original bytes and embedded EXIF are preserved. Confirmed successful working copies are removed automatically; source ZIPs and existing download files outside the working directory are never deleted. Failed or paused working copies may remain for resumption. Keep the ZIP disks connected while migrating.
+Only one media item is extracted at a time to avoid disk contention; completed extractions upload in parallel. There are at most as many active staged jobs as global file workers, plus any retained failed/paused copies. Extraction reads the complete ZIP member to check its CRC and calculates SHA-256. The original bytes and embedded EXIF are preserved. **Each successful working copy is removed immediately after its Google media ID and album membership are confirmed and saved—not at the end of the album.** Source ZIPs and existing download files outside the working directory are never deleted. Failed or paused working copies may remain for resumption. Keep the ZIP disks connected while migrating. For a conservative working-space allowance, reserve the worker count times the largest selected file size, plus a safety margin. Extraction checks remaining free space before writing each file and refuses insufficient space.
 
-Exact SHA-256 matches reuse a confirmed Google media ID, even for different Flickr IDs. One photo/video can be added to multiple Google albums without uploading another copy. The migration journal tracks Google album membership separately from upload state. Deduplication cannot checksum the user's entire pre-existing Google Photos library; it covers known uploads managed by this tool.
+Exact SHA-256 matches reuse a confirmed Google media ID, even for different Flickr IDs. Per-source and per-checksum locks prevent two concurrent albums from uploading identical media twice. One photo/video can be added to multiple Google albums without uploading another copy. The migration journal tracks Google album membership separately from upload state. Deduplication cannot checksum the user's entire pre-existing Google Photos library; it covers known uploads managed by this tool.
 
-Google byte transfers use resumable sessions. Session URLs, upload tokens and content checksums are journaled in the ignored SQLite database; OAuth credentials remain in Keychain. After interruption, Google is queried for its received byte offset. Album and media creation run serially. API batches stay within 50 items; an album cannot exceed 20,000 members. Photos are limited to 200 MB, videos to 20 GB. See [Google uploads](https://developers.google.com/photos/library/guides/upload-media) and [resumable uploads](https://developers.google.com/photos/library/guides/resumable-uploads).
+Google byte transfers use resumable sessions and separate HTTP sessions for each worker. Session URLs, upload tokens and content checksums are journaled in the ignored SQLite database; OAuth credentials remain in Keychain. After interruption, Google is queried for its received byte offset. **File bytes must be transferred individually; Google media creation and album membership requests are batched.** A short 150 ms collection window groups ready items, capped by the batch limit; actual batches are bounded by ready workers, so 4 workers usually yield up to 4 items rather than staging 50 files. One account-wide writer serializes these calls with album creation. Successful and rejected items in partial batch responses are tracked separately. A Google 429 sets a shared cooldown respected by all workers. API batches stay within 50 items; an album cannot exceed 20,000 members. Photos are limited to 200 MB, videos to 20 GB. See [Google uploads](https://developers.google.com/photos/library/guides/upload-media) and [resumable uploads](https://developers.google.com/photos/library/guides/resumable-uploads).
 
 The app stores creation intent before making a Google create request. A saved, unexpired upload token can be reused for the same bytes. If an ambiguous media-create token has expired, the item is blocked for reconciliation to avoid blindly creating a duplicate. An interrupted album-create response is also blocked for reconciliation; do not clear state or rerun a different database to bypass it. Three consecutive item failures stop migration so disk, authorization or API errors do not cause thousands of repeated failures.
 
@@ -220,6 +222,7 @@ flickr-gphotos import-archive METADATA_DIRECTORY [--database PATH]
 flickr-gphotos index-archive-media MEDIA_DIRECTORY [MEDIA_DIRECTORY ...] [--database PATH]
 flickr-gphotos auth-google
 flickr-gphotos migrate-archive [--database PATH] [--dry-run] [--work-dir PATH]
+                              [--workers 1-8] [--album-workers 1-8] [--batch-size 1-50]
 flickr-gphotos migrate [--database PATH]  # legacy direct-Flickr download workflow
 flickr-gphotos status [--database PATH] [--json]
 flickr-gphotos report [--database PATH] [--json]

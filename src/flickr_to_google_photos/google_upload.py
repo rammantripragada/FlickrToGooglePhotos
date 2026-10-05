@@ -8,6 +8,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from threading import Lock, local
 from urllib.parse import urlparse
 
 import requests
@@ -26,14 +27,38 @@ class MediaCreateRejected(RuntimeError):
 
 
 class ArchiveGoogleClient(GooglePhotosClient):
-    def __init__(self, session=None, token_provider=access_token, sleep=time.sleep):
-        self.session = session or requests.Session()
+    def __init__(self, session=None, token_provider=access_token, sleep=time.sleep, clock=time.monotonic):
+        self._session_override = session
+        self._thread = local()
+        self._sessions = []
+        self._session_lock, self._auth_lock, self._cooldown_lock = Lock(), Lock(), Lock()
+        self._cooldown_until = 0.0
+        self.clock = clock
         self.token_provider, self.sleep = token_provider, sleep
         self.on_status: Callable[[str], None] = lambda _text: None
         self.should_stop: Callable[[], bool] = lambda: False
 
+    @property
+    def session(self):
+        if self._session_override is not None:
+            return self._session_override
+        if not hasattr(self._thread, "session"):
+            self._thread.session = requests.Session()
+            with self._session_lock:
+                self._sessions.append(self._thread.session)
+        return self._thread.session
+
+    def close(self) -> None:
+        with self._session_lock:
+            for session in self._sessions:
+                session.close()
+            self._sessions.clear()
+        self._thread = local()
+
     def headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self.token_provider()}"}
+        # Credential refresh/keychain updates must not race across workers.
+        with self._auth_lock:
+            return {"Authorization": f"Bearer {self.token_provider()}"}
 
     def check_authorization(self) -> None:
         self.headers()
@@ -45,6 +70,20 @@ class ArchiveGoogleClient(GooglePhotosClient):
             step = min(seconds, 1.0)
             self.sleep(step)
             seconds -= step
+
+    def _before_request(self) -> None:
+        reported = False
+        while True:
+            if self.should_stop():
+                raise UploadPaused("Migration paused")
+            with self._cooldown_lock:
+                remaining = self._cooldown_until - self.clock()
+            if remaining <= 0:
+                return
+            if not reported:
+                self.on_status(f"Shared Google cooldown: waiting {remaining:.0f}s")
+                reported = True
+            self.sleep(min(remaining, 1.0))
 
     def _delay(self, response, attempt: int) -> None:
         minimum = 30.0 if response is not None and response.status_code == 429 else 2.0
@@ -58,6 +97,9 @@ class ArchiveGoogleClient(GooglePhotosClient):
                     delay = max(delay, (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds())
                 except (ValueError, TypeError):
                     pass
+        if response is not None and response.status_code == 429:
+            with self._cooldown_lock:
+                self._cooldown_until = max(self._cooldown_until, self.clock() + delay)
         self.on_status(f"Google retry: waiting {delay:.0f}s")
         LOG.warning("google_retry", extra={"delay_seconds": delay,
                     "http_status": response.status_code if response is not None else None})
@@ -66,8 +108,7 @@ class ArchiveGoogleClient(GooglePhotosClient):
     def _post(self, url: str, *, retry: bool = True, **kwargs):
         extra_headers = kwargs.pop("headers", {})
         for attempt in range(6):
-            if self.should_stop():
-                raise UploadPaused("Migration paused")
+            self._before_request()
             try:
                 response = self.session.post(url, headers={**self.headers(), **extra_headers}, **kwargs)
             except (requests.ConnectionError, requests.Timeout):
@@ -88,6 +129,7 @@ class ArchiveGoogleClient(GooglePhotosClient):
         return self._post(f"{BASE}/albums", retry=False, json={"album": {"title": title[:500]}}, timeout=60).json()
 
     def album_details(self, album_id: str) -> dict:
+        self._before_request()
         r = self.session.get(f"{BASE}/albums/{album_id}", headers=self.headers(), timeout=60)
         r.raise_for_status()
         return r.json()
@@ -101,8 +143,7 @@ class ArchiveGoogleClient(GooglePhotosClient):
             if page:
                 params["pageToken"] = page
             for attempt in range(6):
-                if self.should_stop():
-                    raise UploadPaused("Migration paused")
+                self._before_request()
                 try:
                     r = self.session.get(f"{BASE}/albums", headers=self.headers(), params=params, timeout=60)
                 except (requests.ConnectionError, requests.Timeout):
@@ -182,10 +223,10 @@ class ArchiveGoogleClient(GooglePhotosClient):
             raise RuntimeError("Invalid Google upload offset or chunk size")
         chunk_size = max(granularity, (8 * 1024**2 // granularity) * granularity)
         failures = 0
+        progress(offset, size)
         with path.open("rb") as stream:
             while offset < size:
-                if self.should_stop():
-                    raise UploadPaused("Migration paused")
+                self._before_request()
                 stream.seek(offset)
                 data = stream.read(min(chunk_size, size - offset))
                 final = offset + len(data) == size
@@ -222,17 +263,30 @@ class ArchiveGoogleClient(GooglePhotosClient):
         raise RuntimeError("Transfer has no token; retry to restart the byte transfer")
 
     def create_media(self, token: str, filename: str, description: str = "") -> str:
-        item = {"simpleMediaItem": {"uploadToken": token, "fileName": filename}}
-        if description:
-            item["description"] = description[:1000]
-        r = self._post(f"{BASE}/mediaItems:batchCreate", json={"newMediaItems": [item]}, timeout=60)
+        result = self.create_media_batch([{"token": token, "filename": filename, "description": description}])[0]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    def create_media_batch(self, media: list[dict]) -> list[str | Exception]:
+        if not 1 <= len(media) <= 50:
+            raise ValueError("Google media batches must contain 1–50 items")
+        items = []
+        for entry in media:
+            item = {"simpleMediaItem": {"uploadToken": entry["token"], "fileName": entry["filename"]}}
+            if entry.get("description"):
+                item["description"] = entry["description"][:1000]
+            items.append(item)
+        r = self._post(f"{BASE}/mediaItems:batchCreate", json={"newMediaItems": items}, timeout=60)
         results = r.json().get("newMediaItemResults", [])
-        if len(results) != 1:
+        if len(results) != len(items):
             raise RuntimeError("Google returned an incomplete media-creation result")
-        result = results[0]
-        if not result.get("mediaItem", {}).get("id"):
-            status = result.get("status", {})
-            if status.get("code", 0) != 0:
-                raise MediaCreateRejected(str(status))
-            raise RuntimeError("Google did not confirm a media ID; creation requires reconciliation")
-        return str(result["mediaItem"]["id"])
+        outcomes = []
+        for result in results:
+            if result.get("mediaItem", {}).get("id"):
+                outcomes.append(str(result["mediaItem"]["id"]))
+            elif result.get("status", {}).get("code", 0) != 0:
+                outcomes.append(MediaCreateRejected(str(result["status"])))
+            else:
+                outcomes.append(RuntimeError("Google did not confirm a media ID; creation requires reconciliation"))
+        return outcomes

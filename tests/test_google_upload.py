@@ -1,7 +1,9 @@
 import requests
 import pytest
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
-from flickr_to_google_photos.google_upload import ArchiveGoogleClient, MediaCreateRejected
+from flickr_to_google_photos.google_upload import ArchiveGoogleClient, MediaCreateRejected, UploadPaused
 
 
 class Response:
@@ -104,3 +106,75 @@ def test_album_name_lookup_does_not_choose_ambiguous_match():
     client = ArchiveGoogleClient(session=session, token_provider=lambda: "test")
     with pytest.raises(RuntimeError, match="Several accessible"):
         client.find_album("Trip")
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 0
+        self.waits = []
+    def clock(self):
+        return self.now
+    def sleep(self, seconds):
+        self.waits.append(seconds)
+        self.now += seconds
+
+
+def test_429_retry_after_sets_shared_cooldown():
+    timer = FakeClock()
+    session = Session([Response(status=429, headers={"Retry-After": "45"}), Response()])
+    client = ArchiveGoogleClient(session=session, token_provider=lambda: "test", sleep=timer.sleep, clock=timer.clock)
+    client.add_media("album", ["media"])
+    assert client._cooldown_until == 45
+    assert timer.now == 45 and len(session.calls) == 2
+
+
+def test_requests_from_any_worker_wait_for_shared_cooldown():
+    timer = FakeClock()
+    session = Session([Response()])
+    client = ArchiveGoogleClient(session=session, token_provider=lambda: "test", sleep=timer.sleep, clock=timer.clock)
+    client._cooldown_until = 3
+    client.add_media("album", ["media"])
+    assert timer.now == 3 and len(session.calls) == 1
+
+
+def test_pause_interrupts_shared_cooldown_without_network_request():
+    session = Session([])
+    client = ArchiveGoogleClient(session=session, token_provider=lambda: "test")
+    client.should_stop = lambda: True
+    with pytest.raises(UploadPaused):
+        client.add_media("album", ["media"])
+    assert not session.calls
+
+
+def test_each_worker_has_its_own_http_session():
+    client = ArchiveGoogleClient(token_provider=lambda: "test")
+    barrier = Barrier(2)
+    def get_session():
+        session = client.session
+        barrier.wait(timeout=3)
+        return session
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first, second = list(pool.map(lambda _: get_session(), range(2)))
+    assert first is not second
+    assert len(client._sessions) == 2
+    client.close()
+    assert not client._sessions
+
+
+def test_media_batch_returns_individual_successes_and_rejections():
+    session = Session([Response({"newMediaItemResults": [
+        {"mediaItem": {"id": "image-id"}}, {"status": {"code": 3, "message": "unsupported"}}]}, status=207)])
+    client = ArchiveGoogleClient(session=session, token_provider=lambda: "test")
+    result = client.create_media_batch([{"token": "photo", "filename": "image.jpg"}, {"token": "video", "filename": "video.mov"}])
+    assert result[0] == "image-id" and isinstance(result[1], MediaCreateRejected)
+    assert len(session.calls) == 1
+    assert len(session.calls[0][1]["json"]["newMediaItems"]) == 2
+
+
+@pytest.mark.parametrize("size", [0, 51])
+def test_media_batch_size_limits_are_checked_without_network(size):
+    session = Session([])
+    client = ArchiveGoogleClient(session=session, token_provider=lambda: "test")
+    with pytest.raises(ValueError):
+        client.create_media_batch([{"token": "token", "filename": "image.jpg"}] * size)
+    assert not session.calls

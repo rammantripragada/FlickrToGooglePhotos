@@ -35,6 +35,7 @@ class MigrationApp:
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.task_rows: dict[str, str] = {}
         self.migration_updates: dict[str, dict] = {}
+        self.migration_totals: dict[str, tuple[int, int]] = {}
         self.migration_stop = threading.Event()
         self.migration_running = False
         self.style = ttk.Style(root)
@@ -166,9 +167,23 @@ class MigrationApp:
         self.work_path = self.tk.StringVar(value=str((self.settings.download_dir / "archive-work").resolve()))
         self.ttk.Entry(work, textvariable=self.work_path, width=70).pack(side="left", padx=6, fill="x", expand=True)
         self.ttk.Button(work, text="Browse", command=self.choose_work_folder).pack(side="left")
-        self.ttk.Label(frame, text="One item is extracted at a time. Successful temporary copies are cleaned up; source ZIPs are kept.").pack(anchor="w", pady=(0, 8))
+        parallel = self.ttk.Frame(frame)
+        parallel.pack(anchor="w", pady=(2, 6))
+        self.ttk.Label(parallel, text="Parallel uploads (total):").pack(side="left")
+        self.upload_workers = self.tk.IntVar(value=self.settings.upload_workers)
+        self.upload_spin = self.ttk.Spinbox(parallel, from_=1, to=8, width=4, textvariable=self.upload_workers)
+        self.upload_spin.pack(side="left", padx=(6, 16))
+        self.ttk.Label(parallel, text="Parallel albums:").pack(side="left")
+        self.album_workers = self.tk.IntVar(value=self.settings.album_workers)
+        self.album_spin = self.ttk.Spinbox(parallel, from_=1, to=8, width=4, textvariable=self.album_workers)
+        self.album_spin.pack(side="left", padx=6)
+        self.ttk.Label(parallel, text="Google batch limit:").pack(side="left", padx=(10, 0))
+        self.batch_size = self.tk.IntVar(value=self.settings.google_batch_size)
+        self.batch_spin = self.ttk.Spinbox(parallel, from_=1, to=50, width=4, textvariable=self.batch_size)
+        self.batch_spin.pack(side="left", padx=6)
+        self.ttk.Label(frame, text="Files upload concurrently; ZIP extraction and Google creation are serialized. Temporary copies are cleaned up; ZIPs are kept.").pack(anchor="w", pady=(0, 4))
         self.ttk.Label(frame, text="New Google albums use _flickr (_flickr_1, _flickr_2 if needed). Saved IDs are reused on resume.").pack(anchor="w", pady=(0, 8))
-        self.migration_tree = self.ttk.Treeview(frame, columns=("title", "total", "local", "progress", "status"), show="headings", height=7)
+        self.migration_tree = self.ttk.Treeview(frame, columns=("title", "total", "local", "progress", "status"), show="headings", height=4)
         for field, title, width in (("title", "Selected album", 290), ("total", "Items", 70), ("local", "Indexed", 70), ("progress", "Album progress", 165), ("status", "Status", 220)):
             self.migration_tree.heading(field, text=title)
             self.migration_tree.column(field, width=width)
@@ -181,6 +196,11 @@ class MigrationApp:
         self.file_progress.pack(fill="x", pady=(4, 2))
         self.file_detail = self.tk.StringVar(value="Current file upload: idle")
         self.ttk.Label(frame, textvariable=self.file_detail).pack(anchor="w")
+        self.transfer_tree = self.ttk.Treeview(frame, columns=("album", "file", "status", "bytes", "progress"), show="headings", height=3)
+        for field, title, width in (("album", "Active album", 200), ("file", "Photo / video", 270), ("status", "Transfer status", 190), ("bytes", "Transferred MB", 130), ("progress", "File progress", 95)):
+            self.transfer_tree.heading(field, text=title)
+            self.transfer_tree.column(field, width=width)
+        self.transfer_tree.pack(fill="x", pady=(6, 0))
         buttons = self.ttk.Frame(frame)
         buttons.pack(anchor="w", pady=(8, 0))
         self.ttk.Button(buttons, text="Check local readiness", command=self.check_archive_ready).pack(side="left")
@@ -225,16 +245,30 @@ class MigrationApp:
             self.status_text.set("Select at least one album in Albums first.")
             return
         work = Path(self.work_path.get()).expanduser()
+        try:
+            workers, albums, batch = self.upload_workers.get(), self.album_workers.get(), self.batch_size.get()
+            if not 1 <= workers <= 8 or not 1 <= albums <= 8 or not 1 <= batch <= 50:
+                raise ValueError("Choose 1–8 uploads/albums and a batch limit of 1–50.")
+        except (ValueError, self.tk.TclError):
+            self.status_text.set("Choose 1–8 uploads/albums and a batch limit of 1–50.")
+            return
         self.migration_running = True
         self.migration_stop.clear()
         self.migration_updates.clear()
+        self.migration_totals = {str(row["flickr_id"]): (int(row["completed"]),
+            max(int(row["inventoried"]), int(row["photo_count"] or 0)))
+            for row in self.database.migration_albums() if row["selected_for_migration"]}
         self.migrate_button.configure(state="disabled")
         self.pause_button.configure(state="normal")
+        self.upload_spin.configure(state="disabled")
+        self.album_spin.configure(state="disabled")
+        self.batch_spin.configure(state="disabled")
         for button in self.album_buttons:
             button.configure(state="disabled")
         def operation():
             from .archive_migrate import ArchiveMigrationService
             service = ArchiveMigrationService(self.database, work, stop=self.migration_stop,
+                upload_workers=workers, album_workers=albums, batch_size=batch,
                 progress=lambda event: self.events.put(("migration_progress", event)))
             return service.run()
         self._background("Migrating local archive albums", operation)
@@ -286,6 +320,28 @@ class MigrationApp:
         byte_percent = event["bytes_done"] / byte_total * 100 if byte_total else 0
         self.file_progress.configure(value=byte_percent)
         self.file_detail.set(f"{event['item']}: {event['bytes_done'] / 1024**2:.1f}/{byte_total / 1024**2:.1f} MB ({byte_percent:.1f}%)" if byte_total else event["item"])
+        if hasattr(self, "transfer_tree"):
+            transfers = event.get("transfers", [])
+            keys = {item["key"] for item in transfers}
+            for key in self.transfer_tree.get_children():
+                if key not in keys:
+                    self.transfer_tree.delete(key)
+            for item in transfers:
+                size, sent = item["bytes_total"], item["bytes_done"]
+                pct = sent / size * 100 if size else 0
+                values = (item["album_title"], item["item"], item["phase"],
+                          f"{sent / 1024**2:.1f}/{size / 1024**2:.1f}", f"{pct:.1f}%")
+                if self.transfer_tree.exists(item["key"]):
+                    self.transfer_tree.item(item["key"], values=values)
+                else:
+                    self.transfer_tree.insert("", "end", iid=item["key"], values=values)
+        label = "Migrating local archive albums"
+        if hasattr(self, "task_rows") and label in self.task_rows:
+            self.migration_totals[album_id] = (complete, total)
+            done = sum(row[0] for row in self.migration_totals.values())
+            target = sum(row[1] for row in self.migration_totals.values())
+            overall = done / target * 100 if target else 0
+            self.task_tree.item(self.task_rows[label], values=(label, f"{overall:.1f}%", f"{event['title']}: {status}"))
 
     def _refresh_google_state(self) -> None:
         self.google_state.set("Google authorization: credentials saved" if CredentialStore().load_google() else "Google authorization: authorize before migration")
@@ -523,6 +579,9 @@ class MigrationApp:
                 label, result = payload  # type: ignore[misc]
                 if label == "Migrating local archive albums":
                     self.migration_running = False
+                    self.upload_spin.configure(state="normal")
+                    self.album_spin.configure(state="normal")
+                    self.batch_spin.configure(state="normal")
                     self.migrate_button.configure(state="normal")
                     self.pause_button.configure(state="disabled")
                     for button in self.album_buttons:
@@ -530,8 +589,21 @@ class MigrationApp:
                     self.migration_detail.set(str(result))
                 if kind == "success":
                     row = self.task_rows.get(label)
-                    if row and self.task_tree.exists(row): self.task_tree.item(row, values=(label, "100%", "Completed"))
-                    self.status_text.set(f"{label} completed: {result}")
+                    if row and self.task_tree.exists(row):
+                        if label == "Migrating local archive albums" and result.get("paused"):
+                            values = list(self.task_tree.item(row, "values"))
+                            values[2] = "Paused — resume to continue"
+                            self.task_tree.item(row, values=values)
+                        elif label == "Migrating local archive albums" and (result.get("failed") or result.get("reconcile_required")):
+                            values = list(self.task_tree.item(row, "values"))
+                            values[2] = "Finished with errors — review album status"
+                            self.task_tree.item(row, values=values)
+                        else:
+                            self.task_tree.item(row, values=(label, "100%", "Completed"))
+                    outcome = "completed"
+                    if label == "Migrating local archive albums":
+                        outcome = "paused" if result.get("paused") else "finished with errors" if result.get("failed") or result.get("reconcile_required") else "completed"
+                    self.status_text.set(f"{label} {outcome}: {result}")
                     if label == "Waiting for Flickr authorization":
                         self._set_authorized_state()
                     if label == "Running read-only Flickr inventory":
