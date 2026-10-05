@@ -150,8 +150,10 @@ class MigrationDatabase:
     def upsert_archive_media(self, records: list[tuple[str, str, str, int]]) -> None:
         with self.connection() as conn:
             conn.executemany("""INSERT INTO archive_media(flickr_id,archive_path,member_name,byte_size)
-              VALUES(?,?,?,?) ON CONFLICT(flickr_id) DO UPDATE SET archive_path=excluded.archive_path,
-              member_name=excluded.member_name,byte_size=excluded.byte_size,indexed_at=CURRENT_TIMESTAMP""", records)
+              SELECT ?,?,?,? WHERE EXISTS (SELECT 1 FROM flickr_photo WHERE flickr_id=?)
+              ON CONFLICT(flickr_id) DO UPDATE SET archive_path=excluded.archive_path,
+              member_name=excluded.member_name,byte_size=excluded.byte_size,indexed_at=CURRENT_TIMESTAMP""",
+              [(*record, record[0]) for record in records])
 
     def duplicate_report(self) -> dict[str, list[dict[str, object]]]:
         """Return duplicate relationships without changing any migration state.
