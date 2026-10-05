@@ -6,7 +6,7 @@ import logging
 import json
 import re
 from pathlib import Path
-from zipfile import ZipFile
+from zipfile import BadZipFile, ZipFile
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 
@@ -224,14 +224,21 @@ def index_archive_media(database: MigrationDatabase, directories: list[Path]) ->
     database.initialize()
     pattern = re.compile(r"_(\d+)_o(?:\.[^/]+)$", re.IGNORECASE)
     batch: list[tuple[str, str, str, int]] = []
+    skipped_archives = 0
     for directory in directories:
         for zip_path in sorted(directory.expanduser().glob("*.zip")):
-            with ZipFile(zip_path) as archive:
-                for member in archive.infolist():
-                    match = pattern.search(member.filename)
-                    if match and not member.is_dir():
-                        batch.append((match.group(1), str(zip_path), member.filename, member.file_size))
-                        if len(batch) >= 1000:
-                            database.upsert_archive_media(batch); batch.clear()
+            try:
+                with ZipFile(zip_path) as archive:
+                    for member in archive.infolist():
+                        match = pattern.search(member.filename)
+                        if match and not member.is_dir():
+                            batch.append((match.group(1), str(zip_path), member.filename, member.file_size))
+                            if len(batch) >= 1000:
+                                database.upsert_archive_media(batch); batch.clear()
+            except BadZipFile:
+                skipped_archives += 1
+                LOG.warning("archive_zip_skipped", extra={"path": str(zip_path), "reason": "invalid_or_incomplete_zip"})
     if batch: database.upsert_archive_media(batch)
-    return database.summary()
+    result = database.summary()
+    result["archive_zips_skipped"] = skipped_archives
+    return result
