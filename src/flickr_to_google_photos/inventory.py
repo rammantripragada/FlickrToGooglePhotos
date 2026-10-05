@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import json
+import re
 from pathlib import Path
 from zipfile import ZipFile
 from collections.abc import Callable
@@ -215,4 +216,22 @@ def _store_archive_records(database: MigrationDatabase, profile: dict, albums: d
     for album_id, raw in albums.items():
         database.upsert_album(nsid, FlickrAlbum(album_id, raw.get("title") or "Untitled Flickr album", raw.get("description"), _integer(raw.get("photo_count")), raw))
         database.replace_album_membership(album_id, [str(item) for item in raw.get("photos", []) if str(item) in imported])
+    return database.summary()
+
+
+def index_archive_media(database: MigrationDatabase, directories: list[Path]) -> dict[str, int]:
+    """Index Flickr media ZIP members locally; never extracts or contacts Flickr."""
+    database.initialize()
+    pattern = re.compile(r"_(\d+)_o(?:\.[^/]+)$", re.IGNORECASE)
+    batch: list[tuple[str, str, str, int]] = []
+    for directory in directories:
+        for zip_path in sorted(directory.expanduser().glob("*.zip")):
+            with ZipFile(zip_path) as archive:
+                for member in archive.infolist():
+                    match = pattern.search(member.filename)
+                    if match and not member.is_dir():
+                        batch.append((match.group(1), str(zip_path), member.filename, member.file_size))
+                        if len(batch) >= 1000:
+                            database.upsert_archive_media(batch); batch.clear()
+    if batch: database.upsert_archive_media(batch)
     return database.summary()

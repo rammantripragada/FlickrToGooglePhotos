@@ -41,6 +41,9 @@ def build_parser() -> argparse.ArgumentParser:
     archive = subparsers.add_parser("import-archive", help="import Flickr Data JSON metadata without Flickr API calls")
     _database_argument(archive)
     archive.add_argument("archive_part", type=Path, help="one extracted Flickr Data ..._partN folder")
+    media = subparsers.add_parser("index-archive-media", help="index local Flickr media ZIPs without extracting them")
+    _database_argument(media)
+    media.add_argument("directories", nargs="+", type=Path, help="one or more directories containing media ZIPs")
     selection = inventory.add_mutually_exclusive_group()
     selection.add_argument("--all-albums", action="store_true", help="select every discovered album for the future migration")
     selection.add_argument("--album", action="append", default=[], metavar="FLICKR_ID", help="select one album; repeat for multiple")
@@ -189,6 +192,9 @@ def main(argv: list[str] | None = None) -> None:
         if args.command == "import-archive":
             from .inventory import import_archive_metadata
             print(json.dumps(import_archive_metadata(database, args.archive_part), sort_keys=True)); return
+        if args.command == "index-archive-media":
+            from .inventory import index_archive_media
+            print(json.dumps(index_archive_media(database, args.directories), sort_keys=True)); return
         if args.command == "migrate":
             from .migrate import MigrationService
             result = MigrationService(

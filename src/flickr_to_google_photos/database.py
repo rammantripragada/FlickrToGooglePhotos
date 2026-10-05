@@ -42,6 +42,10 @@ CREATE TABLE IF NOT EXISTS flickr_album_photo (
 );
 CREATE INDEX IF NOT EXISTS idx_photo_download_state ON flickr_photo(download_state);
 CREATE INDEX IF NOT EXISTS idx_photo_upload_state ON flickr_photo(upload_state);
+CREATE TABLE IF NOT EXISTS archive_media (
+  flickr_id TEXT PRIMARY KEY REFERENCES flickr_photo(flickr_id) ON DELETE CASCADE,
+  archive_path TEXT NOT NULL, member_name TEXT NOT NULL, byte_size INTEGER, indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -140,7 +144,14 @@ class MigrationDatabase:
                 "verified_downloads": conn.execute("SELECT count(*) FROM flickr_photo WHERE verification_state='verified'").fetchone()[0],
                 "google_uploaded": conn.execute("SELECT count(*) FROM flickr_photo WHERE upload_state='uploaded'").fetchone()[0],
                 "google_reconciliation_required": conn.execute("SELECT count(*) FROM flickr_photo WHERE upload_state='uploading'").fetchone()[0],
+                "archive_media_indexed": conn.execute("SELECT count(*) FROM archive_media").fetchone()[0],
             }
+
+    def upsert_archive_media(self, records: list[tuple[str, str, str, int]]) -> None:
+        with self.connection() as conn:
+            conn.executemany("""INSERT INTO archive_media(flickr_id,archive_path,member_name,byte_size)
+              VALUES(?,?,?,?) ON CONFLICT(flickr_id) DO UPDATE SET archive_path=excluded.archive_path,
+              member_name=excluded.member_name,byte_size=excluded.byte_size,indexed_at=CURRENT_TIMESTAMP""", records)
 
     def duplicate_report(self) -> dict[str, list[dict[str, object]]]:
         """Return duplicate relationships without changing any migration state.
