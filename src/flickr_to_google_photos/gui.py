@@ -128,6 +128,7 @@ class MigrationApp:
             self.album_tree.heading(column, text=title, command=lambda field=column: self._sort_albums(field))
             self.album_tree.column(column, width=width, anchor="center" if column in {"selected", "items"} else "w")
         self.album_tree.pack(fill="both", expand=True)
+        self.album_tree.bind("<Button-1>", self._toggle_album_checkbox, add="+")
         buttons = self.ttk.Frame(frame)
         buttons.pack(anchor="w", pady=(10, 0))
         self.ttk.Button(buttons, text="Reload", command=self.load_albums).pack(side="left")
@@ -270,7 +271,22 @@ class MigrationApp:
             arrow = " ↓" if column == self.album_sort_column and self.album_sort_reverse else " ↑" if column == self.album_sort_column else ""
             self.album_tree.heading(column, text=title + arrow)
         for album in sorted(self.album_rows, key=sort_key, reverse=self.album_sort_reverse):
-            self.album_tree.insert("", "end", iid=str(album["flickr_id"]), values=("✓" if album["selected_for_migration"] else "", album["flickr_id"], album["title"], album["photo_count"] or 0))
+            self.album_tree.insert("", "end", iid=str(album["flickr_id"]), values=("☑" if album["selected_for_migration"] else "☐", album["flickr_id"], album["title"], album["photo_count"] or 0))
+
+    def _toggle_album_checkbox(self, event) -> None:
+        if self.album_tree.identify_column(event.x) != "#1":
+            return
+        item = self.album_tree.identify_row(event.y)
+        if not item:
+            return
+        chosen = {str(album["flickr_id"]) for album in self.database.albums() if album["selected_for_migration"]}
+        if item in chosen:
+            chosen.remove(item)
+        else:
+            chosen.add(item)
+        self.database.set_selected_albums(chosen)
+        self.load_albums()
+        return "break"
 
     def _apply_album_selection(self, _selected: bool) -> None:
         chosen = {str(album["flickr_id"]) for album in self.database.albums() if album["selected_for_migration"]}
